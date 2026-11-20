@@ -1,0 +1,6 @@
+{
+  "name": "Willowbrook — Multiplayer Pixel-Art Village Sandbox",
+  "description": "Cozy top-down multiplayer pixel-art village sandbox where 10–15 friends explore, build together, and chat in real time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
