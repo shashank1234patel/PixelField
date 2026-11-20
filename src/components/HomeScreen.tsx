@@ -308,27 +308,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <section className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-stretch">
           <div className="lg:col-span-6 flex flex-col justify-between gap-6">
             <div>
-              <div className="flex items-center gap-2 text-xs font-medium text-[#525E57]">
-                <span>Signed in as {user.displayName}</span>
-                <span aria-hidden="true">·</span>
-                <span>{user.authType === 'google' ? 'Google Account' : 'Guest Browser Session'}</span>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  onClick={() => setShowProfileModal(true)}
-                  className="underline decoration-[#9AA59F] underline-offset-2 hover:text-[#1C2420]"
-                >
-                  Profile
-                </button>
-              </div>
-              <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-[#1C2420] sm:text-4xl">
-                Gather in a cozy shared village.
+              <h1 className="font-display text-3xl font-bold tracking-tight text-[#1C2420] sm:text-4xl">
+                Join or create a village.
               </h1>
-              <p className="mt-3 text-[15px] leading-relaxed text-[#4C5851]">
-                Create a persistent room for 10 to 15 friends, join an existing settlement by code or invite link, or explore an open world below.
-              </p>
 
-              <div className="mt-6 flex flex-wrap items-center gap-3">
+              <div className="mt-5 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(true)}
@@ -343,7 +327,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   className="flex items-center gap-2 rounded-lg border border-[#D4D1C5] bg-white px-4 py-2.5 text-sm font-medium text-[#1C2420] hover:bg-[#FAF9F5] transition-colors whitespace-nowrap shrink-0"
                 >
                   <Settings className="h-4 w-4 text-[#525E57]" />
-                  <span>Avatar & Account</span>
+                  <span>Profile</span>
                 </button>
               </div>
             </div>
@@ -412,20 +396,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </form>
           </div>
 
-          {/* Right column: Village preview */}
+          {/* Right column: Clean village image */}
           <div className="lg:col-span-6">
-            <div className="relative h-full min-h-[260px] overflow-hidden rounded-xl border border-[#DDD9CA] bg-[#213328]">
+            <div className="h-full min-h-[240px] overflow-hidden rounded-xl border border-[#DDD9CA] bg-[#213328]">
               <img
                 src={HERO_IMAGE_URL}
-                alt="Preview of Pixelfield pixel-art village"
+                alt="Pixelfield village"
                 referrerPolicy="no-referrer"
                 className="h-full w-full object-cover pixelated"
               />
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#131C17]/85 via-[#131C17]/35 to-transparent p-5 text-[#F6F5F0]">
-                <p className="text-xs text-[#DCE4DE]">
-                  WASD / Arrows to walk · Click to place tiles · Right-click to clear · Z to undo
-                </p>
-              </div>
             </div>
           </div>
         </section>
@@ -433,10 +412,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         {/* Continue Recently Visited Worlds */}
         <section id="recent" className="space-y-4">
           <div className="flex items-center justify-between gap-4 border-b border-[#E3E0D4] pb-3">
-            <div>
-              <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Continue</h2>
-              <p className="text-xs text-[#5A6660]">Recently visited villages saved for your account</p>
-            </div>
+            <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Recent Worlds</h2>
             <button
               type="button"
               onClick={() => void loadRooms()}
@@ -454,8 +430,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               ))}
             </div>
           ) : recentRooms.length === 0 ? (
-            <div className="rounded-xl border border-[#E3E0D4] bg-white px-6 py-8 text-sm text-[#5A6660]">
-              No recently visited worlds yet. Create your first village above or join an open settlement below.
+            <div className="rounded-xl border border-[#E3E0D4] bg-white px-6 py-6 text-sm text-[#5A6660]">
+              No recent worlds yet.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -511,18 +487,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         {/* Browse Open Rooms */}
         <section id="open-rooms" className="space-y-4">
           <div className="flex items-center justify-between gap-4 border-b border-[#E3E0D4] pb-3">
-            <div>
-              <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Open Villages</h2>
-              <p className="text-xs text-[#5A6660]">Publicly discoverable rooms accepting visitors</p>
-            </div>
+            <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Open Rooms</h2>
             <span className="text-xs font-medium text-[#5A6660] tabular-nums">
-              {openRooms.length} {openRooms.length === 1 ? 'room' : 'rooms'} open
+              {openRooms.length} open
             </span>
           </div>
 
           {openRooms.length === 0 ? (
-            <div className="rounded-xl border border-[#E3E0D4] bg-white px-6 py-8 text-sm text-[#5A6660]">
-              No open villages are listed right now. Create one with visibility set to <strong>Open Discovery</strong> so others can visit.
+            <div className="rounded-xl border border-[#E3E0D4] bg-white px-6 py-6 text-sm text-[#5A6660]">
+              No open rooms right now.
             </div>
           ) : (
             <div className="divide-y divide-[#E8E5DA] overflow-hidden rounded-xl border border-[#E1DDD0] bg-white">

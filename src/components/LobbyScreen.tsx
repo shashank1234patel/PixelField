@@ -133,10 +133,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
         {/* Room identity & Shareable Invite Strip */}
         <section className="flex flex-wrap items-end justify-between gap-6 border-b border-[#E3E0D4] pb-6">
           <div>
-            <p className="text-xs font-medium text-[#5A6660]">
-              Village Lobby · Waiting for host to open the gates
-            </p>
-            <h1 className="mt-1.5 font-display text-3xl font-bold tracking-tight text-[#1C2420]">
+            <h1 className="font-display text-3xl font-bold tracking-tight text-[#1C2420]">
               {room.name}
             </h1>
           </div>
