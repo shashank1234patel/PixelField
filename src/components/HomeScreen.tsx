@@ -62,6 +62,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onLoggedOut,
   onEnterRoom,
 }) => {
+  const [activeTab, setActiveTab] = useState<'home' | 'recent' | 'open'>('home');
   const [recentRooms, setRecentRooms] = useState<RoomSummary[]>([]);
   const [openRooms, setOpenRooms] = useState<RoomSummary[]>([]);
   const [loadingLists, setLoadingLists] = useState(true);
@@ -248,31 +249,65 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {/* Strict 3-zone Top Bar Contract */}
       <header className="sticky top-0 z-20 border-b border-[#E3E0D4] bg-[#F6F5F0]/95 backdrop-blur-xs">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-8 px-6 py-4">
-          <a
-            href="#top"
+          <button
+            type="button"
+            onClick={() => setActiveTab('home')}
             className="font-display text-xl font-bold tracking-tight text-[#1C2420] whitespace-nowrap shrink-0"
           >
             Pixelfield
-          </a>
+          </button>
 
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-[#4F5C55]">
-            <a href="#recent" className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab('home')}
+              className={`transition-colors whitespace-nowrap shrink-0 pb-0.5 ${
+                activeTab === 'home'
+                  ? 'text-[#1C2420] border-b-2 border-[#2D6A4F]'
+                  : 'hover:text-[#1C2420]'
+              }`}
+            >
+              Home
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('recent');
+                void loadRooms();
+              }}
+              className={`transition-colors whitespace-nowrap shrink-0 pb-0.5 ${
+                activeTab === 'recent'
+                  ? 'text-[#1C2420] border-b-2 border-[#2D6A4F]'
+                  : 'hover:text-[#1C2420]'
+              }`}
+            >
               Recent Worlds
-            </a>
-            <a href="#open-rooms" className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0">
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('open');
+                void loadRooms();
+              }}
+              className={`transition-colors whitespace-nowrap shrink-0 pb-0.5 ${
+                activeTab === 'open'
+                  ? 'text-[#1C2420] border-b-2 border-[#2D6A4F]'
+                  : 'hover:text-[#1C2420]'
+              }`}
+            >
               Open Rooms
-            </a>
+            </button>
             <button
               type="button"
               onClick={() => setShowHelpModal(true)}
-              className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0 pb-0.5"
             >
               Controls
             </button>
             <button
               type="button"
               onClick={() => setShowProfileModal(true)}
-              className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0"
+              className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0 pb-0.5"
             >
               {user.displayName}
             </button>
@@ -287,9 +322,52 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <span>Create World</span>
           </button>
         </div>
+
+        {/* Mobile navigation row */}
+        <div className="flex md:hidden items-center gap-5 border-t border-[#E3E0D4] px-6 py-2.5 text-xs font-medium text-[#4F5C55] overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setActiveTab('home')}
+            className={`whitespace-nowrap shrink-0 ${activeTab === 'home' ? 'text-[#1C2420] font-semibold' : ''}`}
+          >
+            Home
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('recent');
+              void loadRooms();
+            }}
+            className={`whitespace-nowrap shrink-0 ${activeTab === 'recent' ? 'text-[#1C2420] font-semibold' : ''}`}
+          >
+            Recent Worlds
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('open');
+              void loadRooms();
+            }}
+            className={`whitespace-nowrap shrink-0 ${activeTab === 'open' ? 'text-[#1C2420] font-semibold' : ''}`}
+          >
+            Open Rooms
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowProfileModal(true)}
+            className="whitespace-nowrap shrink-0"
+          >
+            Profile
+          </button>
+        </div>
       </header>
 
-      <main id="top" className="mx-auto w-full max-w-6xl flex-1 px-6 py-8 lg:py-10 space-y-12">
+      <main
+        id="top"
+        className={`mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-8 lg:py-10 space-y-8 ${
+          activeTab === 'home' ? 'justify-center' : 'justify-start'
+        }`}
+      >
         {bannerMessage && (
           <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E2CFA8] bg-[#FDF8EC] px-4 py-3 text-sm text-[#6B4E16]">
             <span>{bannerMessage}</span>
@@ -304,7 +382,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </div>
         )}
 
-        {/* Hero split: Actions + Join with Code on left, Village Preview on right */}
+        {/* Home View */}
+        {activeTab === 'home' && (
         <section className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-stretch">
           <div className="lg:col-span-6 flex flex-col justify-between gap-6">
             <div>
@@ -408,9 +487,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
           </div>
         </section>
+        )}
 
-        {/* Continue Recently Visited Worlds */}
-        <section id="recent" className="space-y-4">
+        {/* Dedicated Recent Worlds View */}
+        {activeTab === 'recent' && (
+        <section id="recent" className="w-full flex-1 space-y-4">
           <div className="flex items-center justify-between gap-4 border-b border-[#E3E0D4] pb-3">
             <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Recent Worlds</h2>
             <button
@@ -483,15 +564,57 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
           )}
         </section>
+        )}
 
-        {/* Browse Open Rooms */}
-        <section id="open-rooms" className="space-y-4">
+        {/* Dedicated Open Rooms View */}
+        {activeTab === 'open' && (
+        <section id="open-rooms" className="w-full flex-1 space-y-4">
           <div className="flex items-center justify-between gap-4 border-b border-[#E3E0D4] pb-3">
             <h2 className="font-display text-2xl font-semibold text-[#1C2420]">Open Rooms</h2>
-            <span className="text-xs font-medium text-[#5A6660] tabular-nums">
-              {openRooms.length} open
-            </span>
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-medium text-[#5A6660] tabular-nums">
+                {openRooms.length} open
+              </span>
+              <button
+                type="button"
+                onClick={() => void loadRooms()}
+                className="flex items-center gap-1.5 text-xs font-medium text-[#4C5851] hover:text-[#1C2420] whitespace-nowrap"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${loadingLists ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
+
+          {needsPasswordFor && (
+            <div className="flex flex-col gap-2 rounded-xl border border-[#E1DDD0] bg-white p-4 sm:flex-row sm:items-center">
+              <div className="relative flex-1">
+                <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7A857E]" />
+                <input
+                  type="password"
+                  value={joinPassword}
+                  onChange={(e) => setJoinPassword(e.target.value)}
+                  placeholder="Enter room password"
+                  autoFocus
+                  className="w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] py-2 pl-9 pr-3 text-sm text-[#1C2420] focus:border-[#2D6A4F] focus:bg-white focus:outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleJoinIdentifier(needsPasswordFor, joinPassword)}
+                disabled={joining}
+                className="rounded-lg bg-[#2D6A4F] px-4 py-2 text-sm font-semibold text-white hover:bg-[#23553F] whitespace-nowrap shrink-0"
+              >
+                Unlock & Join
+              </button>
+            </div>
+          )}
+
+          {joinError && (
+            <p role="alert" className="text-xs font-medium text-[#9B2C2C]">
+              {joinError}
+            </p>
+          )}
 
           {openRooms.length === 0 ? (
             <div className="rounded-xl border border-[#E3E0D4] bg-white px-6 py-6 text-sm text-[#5A6660]">
@@ -548,6 +671,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
           )}
         </section>
+        )}
       </main>
 
       {/* Create Room Modal */}
