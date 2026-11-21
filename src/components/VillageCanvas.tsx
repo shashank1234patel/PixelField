@@ -8,10 +8,9 @@ import {
   GroundTile,
   ObjectTile,
   type PaletteItem,
+  SPAWN_TILE,
   TILE_SIZE,
   type TileLayer,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
   isInBuildZone,
   isProtectedLandmarkTile,
   isTileSolid,
@@ -27,6 +26,8 @@ interface VillageCanvasProps {
   buildPolicy: BuildPolicy;
   zoom: number;
   reducedMotion: boolean;
+  showMinimap: boolean;
+  worldVersion: number;
   onSendMove: (seq: number, x: number, y: number, facing: FacingDir, walking: boolean) => void;
   onRequestEdit: (tileX: number, tileY: number, layer: TileLayer, tileId: number) => void;
   onCoordsChange?: (x: number, y: number) => void;
@@ -34,6 +35,76 @@ interface VillageCanvasProps {
 
 const MOVE_SPEED = 5.4; // tiles/sec
 const MAX_REACH = 6.2;
+
+function getMinimapColor(ground: number, obj: number): string {
+  if (obj !== ObjectTile.NONE) {
+    switch (obj) {
+      case ObjectTile.ROOF_TERRACOTTA:
+        return '#C86442';
+      case ObjectTile.ROOF_SLATE:
+        return '#4B5768';
+      case ObjectTile.WOOD_WALL:
+      case ObjectTile.WOOD_DOOR:
+      case ObjectTile.WINDOW:
+        return '#A57548';
+      case ObjectTile.STONE_WALL:
+        return '#8D959C';
+      case ObjectTile.TREE_OAK:
+        return '#2E6A34';
+      case ObjectTile.TREE_PINE:
+        return '#225432';
+      case ObjectTile.BUSH:
+        return '#3E7D44';
+      case ObjectTile.FENCE:
+        return '#8F6842';
+      case ObjectTile.CROP_CARROT:
+      case ObjectTile.CROP_SUNFLOWER:
+        return '#75A847';
+      case ObjectTile.FLOWER_BED:
+        return '#D96B8A';
+      case ObjectTile.WELL:
+      case ObjectTile.LANTERN_TOWER:
+        return '#D8DFE5';
+      case ObjectTile.LAMP_POST:
+        return '#F4C95D';
+      case ObjectTile.SHEEP:
+        return '#F5F4EF';
+      case ObjectTile.CHICKEN:
+      case ObjectTile.HAY_BALE:
+        return '#E4B852';
+      case ObjectTile.BENCH:
+      case ObjectTile.CRATE:
+      case ObjectTile.BARREL:
+      case ObjectTile.SIGNPOST:
+        return '#9C6D3E';
+      default:
+        return '#6C7570';
+    }
+  }
+  switch (ground) {
+    case GroundTile.WATER:
+      return '#3B82B6';
+    case GroundTile.BRIDGE:
+    case GroundTile.WOOD_FLOOR:
+      return '#B58450';
+    case GroundTile.STONE_PATH:
+      return '#A8AEB2';
+    case GroundTile.ROAD_EDGE:
+      return '#8B9297';
+    case GroundTile.PLAZA_STONE:
+      return '#C0C4C7';
+    case GroundTile.DIRT_SOIL:
+      return '#8B6242';
+    case GroundTile.SAND_SHORE:
+      return '#D6C493';
+    case GroundTile.GRASS_FLOWERS:
+      return '#70B04D';
+    case GroundTile.GRASS_TUFT:
+      return '#52933D';
+    default:
+      return '#5FA246';
+  }
+}
 
 function collides(map: WorldMapData, x: number, y: number): boolean {
   const r = 0.28;
@@ -46,8 +117,8 @@ function collides(map: WorldMapData, x: number, y: number): boolean {
   for (const [sx, sy] of pts) {
     const tx = Math.floor(sx + 0.5);
     const ty = Math.floor(sy + 0.5);
-    if (tx < 0 || tx >= WORLD_WIDTH || ty < 0 || ty >= WORLD_HEIGHT) return true;
-    const idx = tileIndex(tx, ty);
+    if (tx < 0 || tx >= map.width || ty < 0 || ty >= map.height) return true;
+    const idx = tileIndex(tx, ty, map.width);
     if (isTileSolid(map.ground[idx], map.objects[idx])) return true;
   }
   return false;
@@ -62,15 +133,22 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
   buildPolicy,
   zoom,
   reducedMotion,
+  showMinimap,
+  worldVersion,
   onSendMove,
   onRequestEdit,
   onCoordsChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapBaseRef = useRef<HTMLCanvasElement | null>(null);
+  const minimapVersionRef = useRef<number>(-1);
+  const minimapMapRef = useRef<WorldMapData | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
   const dpadRef = useRef({ up: false, down: false, left: false, right: false });
   const hoverTileRef = useRef<{ x: number; y: number } | null>(null);
-  const cameraRef = useRef({ x: 31 * TILE_SIZE, y: 26 * TILE_SIZE });
+  const cameraRef = useRef({ x: SPAWN_TILE.x * TILE_SIZE, y: SPAWN_TILE.y * TILE_SIZE });
+  const cameraInitializedRef = useRef(false);
   const moveSeqRef = useRef(1);
   const lastSentMoveRef = useRef({ t: 0, x: -1, y: -1, facing: 'down' as FacingDir, walking: false });
   const lastReportedCoordRef = useRef({ x: -1, y: -1 });
@@ -83,6 +161,8 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
     buildPolicy,
     zoom,
     reducedMotion,
+    showMinimap,
+    worldVersion,
     onSendMove,
     onRequestEdit,
     onCoordsChange,
@@ -94,6 +174,8 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
     buildPolicy,
     zoom,
     reducedMotion,
+    showMinimap,
+    worldVersion,
     onSendMove,
     onRequestEdit,
     onCoordsChange,
@@ -108,10 +190,10 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
   const triggerEditAt = (tx: number, ty: number) => {
     const map = mapRef.current;
     if (!map) return;
-    if (tx < 0 || tx >= WORLD_WIDTH || ty < 0 || ty >= WORLD_HEIGHT) return;
+    if (tx < 0 || tx >= map.width || ty < 0 || ty >= map.height) return;
     const { buildMode: mode, selectedItem: item, onRequestEdit: editFn } = propsRef.current;
     if (mode === 'break') {
-      const idx = tileIndex(tx, ty);
+      const idx = tileIndex(tx, ty, map.width);
       if (map.objects[idx] !== ObjectTile.NONE) {
         editFn(tx, ty, 'object', ObjectTile.NONE);
       } else if (map.ground[idx] !== GroundTile.GRASS) {
@@ -213,6 +295,8 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         buildPolicy: policy,
         zoom: currentZoom,
         reducedMotion: lowEffects,
+        showMinimap: minimapVisible,
+        worldVersion: currentWorldVersion,
         onSendMove: sendMoveFn,
         onCoordsChange: reportCoords,
       } = propsRef.current;
@@ -247,8 +331,8 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
             self.facing = dy > 0 ? 'down' : 'up';
           }
 
-          const nextX = Math.max(0.5, Math.min(WORLD_WIDTH - 1.5, self.renderX + dx * MOVE_SPEED * dt));
-          const nextY = Math.max(0.5, Math.min(WORLD_HEIGHT - 1.5, self.renderY + dy * MOVE_SPEED * dt));
+          const nextX = Math.max(0.5, Math.min(map.width - 1.5, self.renderX + dx * MOVE_SPEED * dt));
+          const nextY = Math.max(0.5, Math.min(map.height - 1.5, self.renderY + dy * MOVE_SPEED * dt));
 
           if (!collides(map, nextX, self.renderY)) {
             self.renderX = nextX;
@@ -296,17 +380,23 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           reportCoords(rx, ry);
         }
 
-        // Smooth camera follow clamped to world edges
+        // Smooth camera follow clamped to world edges (instant lock on first frame)
         const targetCamX = (self.renderX + 0.5) * scaledTile - viewW / 2;
         const targetCamY = (self.renderY + 0.5) * scaledTile - viewH / 2;
-        const maxCamX = Math.max(0, WORLD_WIDTH * scaledTile - viewW);
-        const maxCamY = Math.max(0, WORLD_HEIGHT * scaledTile - viewH);
+        const maxCamX = Math.max(0, map.width * scaledTile - viewW);
+        const maxCamY = Math.max(0, map.height * scaledTile - viewH);
         const clampedCamX = Math.max(0, Math.min(maxCamX, targetCamX));
         const clampedCamY = Math.max(0, Math.min(maxCamY, targetCamY));
 
-        const camLerp = lowEffects ? 1 : Math.min(1, dt * 9);
-        cameraRef.current.x += (clampedCamX - cameraRef.current.x) * camLerp;
-        cameraRef.current.y += (clampedCamY - cameraRef.current.y) * camLerp;
+        if (!cameraInitializedRef.current) {
+          cameraRef.current.x = clampedCamX;
+          cameraRef.current.y = clampedCamY;
+          cameraInitializedRef.current = true;
+        } else {
+          const camLerp = lowEffects ? 1 : Math.min(1, dt * 9);
+          cameraRef.current.x += (clampedCamX - cameraRef.current.x) * camLerp;
+          cameraRef.current.y += (clampedCamY - cameraRef.current.y) * camLerp;
+        }
       }
 
       // Interpolate remote players smoothly
@@ -328,9 +418,9 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         const camY = Math.round(cameraRef.current.y);
 
         const startCol = Math.max(0, Math.floor(camX / scaledTile) - 1);
-        const endCol = Math.min(WORLD_WIDTH - 1, Math.ceil((camX + viewW) / scaledTile) + 1);
+        const endCol = Math.min(map.width - 1, Math.ceil((camX + viewW) / scaledTile) + 1);
         const startRow = Math.max(0, Math.floor(camY / scaledTile) - 1);
-        const endRow = Math.min(WORLD_HEIGHT - 1, Math.ceil((camY + viewH) / scaledTile) + 1);
+        const endRow = Math.min(map.height - 1, Math.ceil((camY + viewH) / scaledTile) + 1);
 
         const waterFrameIdx = lowEffects ? 0 : Math.floor(animTime * 2.5) % atlas.waterFrames.length;
         const lampPositions: Array<{ sx: number; sy: number; big: boolean }> = [];
@@ -338,7 +428,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         // Ground layer
         for (let ty = startRow; ty <= endRow; ty++) {
           for (let tx = startCol; tx <= endCol; tx++) {
-            const idx = tileIndex(tx, ty);
+            const idx = tileIndex(tx, ty, map.width);
             const gTile = map.ground[idx];
             const sx = tx * scaledTile - camX;
             const sy = ty * scaledTile - camY;
@@ -358,7 +448,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
             }
 
             // Subtle highlight for permitted build zones when policy is 'build_zones'
-            if (policy === 'build_zones' && isInBuildZone(tx, ty)) {
+            if (policy === 'build_zones' && isInBuildZone(tx, ty, map.width, map.height)) {
               ctx.fillStyle = 'rgba(255, 243, 176, 0.08)';
               ctx.fillRect(sx, sy, scaledTile, scaledTile);
             }
@@ -368,7 +458,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         // Object layer
         for (let ty = startRow; ty <= endRow; ty++) {
           for (let tx = startCol; tx <= endCol; tx++) {
-            const idx = tileIndex(tx, ty);
+            const idx = tileIndex(tx, ty, map.width);
             const oTile = map.objects[idx];
             if (oTile === ObjectTile.NONE) continue;
             const sprite = atlas.objects.get(oTile);
@@ -393,8 +483,11 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           const sx = hover.x * scaledTile - camX;
           const sy = hover.y * scaledTile - camY;
           const inRange = Math.hypot(hover.x - self.renderX, hover.y - self.renderY) <= MAX_REACH;
-          const protectedTile = isProtectedLandmarkTile(hover.x, hover.y);
-          const allowedZone = policy !== 'build_zones' || self.role !== 'player' || isInBuildZone(hover.x, hover.y);
+          const protectedTile = isProtectedLandmarkTile(hover.x, hover.y, map.width, map.height);
+          const allowedZone =
+            policy !== 'build_zones' ||
+            self.role !== 'player' ||
+            isInBuildZone(hover.x, hover.y, map.width, map.height);
           const valid = inRange && !protectedTile && allowedZone;
 
           if (mode === 'build' && valid) {
@@ -472,6 +565,67 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           }
           ctx.restore();
         }
+        // 3. Render live minimap when visible
+        if (minimapVisible && minimapCanvasRef.current) {
+          const mini = minimapCanvasRef.current;
+          if (mini.width !== map.width || mini.height !== map.height) {
+            mini.width = map.width;
+            mini.height = map.height;
+          }
+          if (
+            !minimapBaseRef.current ||
+            minimapMapRef.current !== map ||
+            minimapVersionRef.current !== currentWorldVersion
+          ) {
+            const base = minimapBaseRef.current ?? document.createElement('canvas');
+            base.width = map.width;
+            base.height = map.height;
+            const bctx = base.getContext('2d');
+            if (bctx) {
+              for (let y = 0; y < map.height; y++) {
+                for (let x = 0; x < map.width; x++) {
+                  const idx = tileIndex(x, y, map.width);
+                  bctx.fillStyle = getMinimapColor(map.ground[idx], map.objects[idx]);
+                  bctx.fillRect(x, y, 1, 1);
+                }
+              }
+            }
+            minimapBaseRef.current = base;
+            minimapMapRef.current = map;
+            minimapVersionRef.current = currentWorldVersion;
+          }
+
+          const mctx = mini.getContext('2d');
+          if (mctx && minimapBaseRef.current) {
+            mctx.imageSmoothingEnabled = false;
+            mctx.drawImage(minimapBaseRef.current, 0, 0);
+
+            // Viewport rectangle
+            const vx = camX / scaledTile;
+            const vy = camY / scaledTile;
+            const vw = viewW / scaledTile;
+            const vh = viewH / scaledTile;
+            mctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+            mctx.lineWidth = Math.max(1, map.width / 160);
+            mctx.strokeRect(vx, vy, vw, vh);
+
+            // Villager markers
+            if (playersMap) {
+              const dotR = map.width >= 120 ? 2.4 : 1.5;
+              for (const p of playersMap.values()) {
+                if (!p.connected) continue;
+                const isSelf = p.uid === uid;
+                mctx.beginPath();
+                mctx.arc(p.renderX + 0.5, p.renderY + 0.5, isSelf ? dotR + 0.8 : dotR, 0, Math.PI * 2);
+                mctx.fillStyle = isSelf ? '#FFFFFF' : p.avatarColor;
+                mctx.fill();
+                mctx.lineWidth = 1;
+                mctx.strokeStyle = isSelf ? '#16201C' : 'rgba(255,255,255,0.85)';
+                mctx.stroke();
+              }
+            }
+          }
+        }
       }
 
       rafId = requestAnimationFrame(frame);
@@ -486,12 +640,13 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
 
   const screenToTile = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
-    if (!canvas) return null;
+    const map = mapRef.current;
+    if (!canvas || !map) return null;
     const rect = canvas.getBoundingClientRect();
     const scaledTile = TILE_SIZE * propsRef.current.zoom;
     const tx = Math.floor((clientX - rect.left + cameraRef.current.x) / scaledTile);
     const ty = Math.floor((clientY - rect.top + cameraRef.current.y) / scaledTile);
-    if (tx < 0 || tx >= WORLD_WIDTH || ty < 0 || ty >= WORLD_HEIGHT) return null;
+    if (tx < 0 || tx >= map.width || ty < 0 || ty >= map.height) return null;
     return { x: tx, y: ty };
   };
 
@@ -514,12 +669,13 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
   const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     const tile = screenToTile(e.clientX, e.clientY);
-    if (!tile || !mapRef.current) return;
+    const map = mapRef.current;
+    if (!tile || !map) return;
     // Right-click always clears/breaks quickly
-    const idx = tileIndex(tile.x, tile.y);
-    if (mapRef.current.objects[idx] !== ObjectTile.NONE) {
+    const idx = tileIndex(tile.x, tile.y, map.width);
+    if (map.objects[idx] !== ObjectTile.NONE) {
       propsRef.current.onRequestEdit(tile.x, tile.y, 'object', ObjectTile.NONE);
-    } else if (mapRef.current.ground[idx] !== GroundTile.GRASS) {
+    } else if (map.ground[idx] !== GroundTile.GRASS) {
       propsRef.current.onRequestEdit(tile.x, tile.y, 'ground', GroundTile.GRASS);
     }
   };
@@ -551,6 +707,17 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         className="h-full w-full block cursor-crosshair pixelated touch-none"
         aria-label="Pixelfield interactive multiplayer village world"
       />
+
+      {/* Toggleable Live Minimap */}
+      {showMinimap && (
+        <div className="pointer-events-none fixed left-3 top-16 z-20 overflow-hidden rounded-lg border border-white/15 bg-[#16201C]/90 p-1.5 shadow-xl backdrop-blur-sm sm:left-4">
+          <canvas
+            ref={minimapCanvasRef}
+            className="block h-[132px] w-[176px] rounded-xs pixelated"
+            aria-label="Village minimap"
+          />
+        </div>
+      )}
 
       {/* Mobile Touch Controls (shown on touch devices or narrow viewports) */}
       {isTouchDevice && (

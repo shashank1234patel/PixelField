@@ -139,7 +139,12 @@ export function useRoomSocket(
             saveReconnectCredential(msg.room.id, msg.reconnectToken);
 
             // Reconstruct authoritative map from chunks
-            mapRef.current = unpackChunksToMap(msg.world.chunks);
+            mapRef.current = unpackChunksToMap(
+              msg.world.chunks,
+              msg.world.width,
+              msg.world.height,
+              msg.world.chunkSize
+            );
             setWorldVersion(msg.world.saveVersion);
 
             // Hydrate live players map idempotently
@@ -213,7 +218,7 @@ export function useRoomSocket(
               pendingEditsRef.current.delete(msg.requestId);
             }
             if (mapRef.current) {
-              const idx = tileIndex(msg.tileX, msg.tileY);
+              const idx = tileIndex(msg.tileX, msg.tileY, mapRef.current.width);
               if (msg.layer === 'ground') {
                 mapRef.current.ground[idx] = msg.tileId;
               } else {
@@ -232,7 +237,7 @@ export function useRoomSocket(
               pendingEditsRef.current.delete(msg.requestId);
             }
             if (mapRef.current) {
-              const idx = tileIndex(msg.tileX, msg.tileY);
+              const idx = tileIndex(msg.tileX, msg.tileY, mapRef.current.width);
               if (msg.layer === 'ground') {
                 mapRef.current.ground[idx] = msg.currentTileId;
               } else {
@@ -346,7 +351,7 @@ export function useRoomSocket(
   const requestEdit = useCallback(
     (tileX: number, tileY: number, layer: TileLayer, tileId: number) => {
       if (!mapRef.current) return;
-      const idx = tileIndex(tileX, tileY);
+      const idx = tileIndex(tileX, tileY, mapRef.current.width);
       const prevTile = layer === 'ground' ? mapRef.current.ground[idx] : mapRef.current.objects[idx];
       if (prevTile === tileId) return;
 

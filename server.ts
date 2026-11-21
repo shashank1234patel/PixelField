@@ -167,7 +167,7 @@ async function startServer() {
 
   app.post('/api/rooms', requireSession, async (req: AuthRequest, res) => {
     try {
-      const { name, visibility, capacity, allowLateJoin, buildPolicy, password } = req.body ?? {};
+      const { name, visibility, capacity, allowLateJoin, buildPolicy, password, seed } = req.body ?? {};
       const created = await createRoomWithWorld({
         ownerUid: req.currentUser!.uid,
         name,
@@ -176,6 +176,7 @@ async function startServer() {
         allowLateJoin,
         buildPolicy,
         password,
+        seed,
       });
       res.status(201).json(created);
     } catch (error) {

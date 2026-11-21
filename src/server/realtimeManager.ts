@@ -16,10 +16,7 @@ import { type WorldMapData, packMapToChunks } from '../shared/starterMap.ts';
 import {
   ALLOWED_GROUND_TILES,
   ALLOWED_OBJECT_TILES,
-  CHUNK_SIZE,
-  SPAWN_TILE,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
+  getSpawnPoints,
   isInBuildZone,
   isProtectedLandmarkTile,
   isTileSolid,
@@ -75,6 +72,7 @@ interface ConnectedPlayer {
 interface ActiveRoomSession {
   room: RoomSummary;
   worldId: string;
+  chunkSize: number;
   saveVersion: number;
   map: WorldMapData;
   players: Map<string, ConnectedPlayer>;
@@ -331,6 +329,7 @@ export class RealtimeRoomManager {
     const session: ActiveRoomSession = {
       room: formatRoomSummary(roomRow, 0),
       worldId: worldData.worldId,
+      chunkSize: worldData.chunkSize,
       saveVersion: worldData.saveVersion,
       map: worldData.map,
       players: new Map(),
@@ -393,7 +392,12 @@ export class RealtimeRoomManager {
       existingPlayer.lastPongAt = Date.now();
       player = existingPlayer;
     } else {
-      const safeSpawn = this.findSafeSpawn(session.map, authResult.lastX, authResult.lastY);
+      const safeSpawn = this.findSafeSpawn(
+        session,
+        authResult.lastX,
+        authResult.lastY,
+        authResult.hasSavedPosition
+      );
       player = {
         uid: user.uid,
         displayName: user.displayName,
@@ -422,7 +426,7 @@ export class RealtimeRoomManager {
     session.room.onlineCount = this.getOnlineCount(session.room.id);
 
     // Send full authoritative room & world snapshot to joining client
-    const chunks = packMapToChunks(session.map);
+    const chunks = packMapToChunks(session.map, session.chunkSize);
     this.send(ws, {
       v: PROTOCOL_VERSION,
       type: 'room.snapshot',
@@ -431,9 +435,9 @@ export class RealtimeRoomManager {
       reconnectToken: authResult.reconnectToken,
       players: Array.from(session.players.values()).map((p) => this.toPublicPlayer(p)),
       world: {
-        width: WORLD_WIDTH,
-        height: WORLD_HEIGHT,
-        chunkSize: CHUNK_SIZE,
+        width: session.map.width,
+        height: session.map.height,
+        chunkSize: session.chunkSize,
         saveVersion: session.saveVersion,
         chunks,
       },
@@ -471,24 +475,46 @@ export class RealtimeRoomManager {
     return { roomId: session.room.id };
   }
 
-  private findSafeSpawn(map: WorldMapData, preferX: number, preferY: number): { x: number; y: number } {
-    const candidates: Array<[number, number]> = [
-      [preferX, preferY],
-      [SPAWN_TILE.x, SPAWN_TILE.y],
-      [SPAWN_TILE.x - 1, SPAWN_TILE.y],
-      [SPAWN_TILE.x + 1, SPAWN_TILE.y],
-      [SPAWN_TILE.x, SPAWN_TILE.y + 1],
-      [31, 27],
-    ];
-    for (const [cx, cy] of candidates) {
-      const ix = Math.max(1, Math.min(WORLD_WIDTH - 2, Math.round(cx)));
-      const iy = Math.max(1, Math.min(WORLD_HEIGHT - 2, Math.round(cy)));
-      const idx = tileIndex(ix, iy);
-      if (!isTileSolid(map.ground[idx], map.objects[idx])) {
+  private findSafeSpawn(
+    session: ActiveRoomSession,
+    preferX: number,
+    preferY: number,
+    preferSaved: boolean
+  ): { x: number; y: number } {
+    const { map } = session;
+    const isWalkable = (ix: number, iy: number) => {
+      if (ix < 1 || ix >= map.width - 1 || iy < 1 || iy >= map.height - 1) return false;
+      const idx = tileIndex(ix, iy, map.width);
+      return !isTileSolid(map.ground[idx], map.objects[idx]);
+    };
+    const isOccupied = (ix: number, iy: number) => {
+      for (const p of session.players.values()) {
+        if (!p.connected) continue;
+        if (Math.hypot(p.x - ix, p.y - iy) < 1.2) return true;
+      }
+      return false;
+    };
+
+    if (preferSaved) {
+      const ix = Math.round(preferX);
+      const iy = Math.round(preferY);
+      if (isWalkable(ix, iy) && !isOccupied(ix, iy)) {
         return { x: ix, y: iy };
       }
     }
-    return { x: SPAWN_TILE.x, y: SPAWN_TILE.y };
+
+    const spawnRing = getSpawnPoints(map.width, map.height);
+    for (const pt of spawnRing) {
+      if (isWalkable(pt.x, pt.y) && !isOccupied(pt.x, pt.y)) {
+        return { x: pt.x, y: pt.y };
+      }
+    }
+    for (const pt of spawnRing) {
+      if (isWalkable(pt.x, pt.y)) {
+        return { x: pt.x, y: pt.y };
+      }
+    }
+    return spawnRing[0] ?? { x: Math.floor(map.width / 2), y: Math.floor(map.height / 2) };
   }
 
   private handleDisconnect(roomId: string, uid: string, ws: WebSocket) {
@@ -754,8 +780,8 @@ export class RealtimeRoomManager {
     const dist = Math.hypot(dx, dy);
 
     // Bounds check
-    const clampedX = Math.max(0.5, Math.min(WORLD_WIDTH - 1.5, targetX));
-    const clampedY = Math.max(0.5, Math.min(WORLD_HEIGHT - 1.5, targetY));
+    const clampedX = Math.max(0.5, Math.min(session.map.width - 1.5, targetX));
+    const clampedY = Math.max(0.5, Math.min(session.map.height - 1.5, targetY));
 
     // Anti-speed-hack / teleport check
     const maxStep = Math.max(1.2, MAX_SPEED_TILES_PER_SEC * dtSec);
@@ -814,8 +840,8 @@ export class RealtimeRoomManager {
     for (const [sx, sy] of samplePoints) {
       const tx = Math.floor(sx + 0.5);
       const ty = Math.floor(sy + 0.5);
-      if (tx < 0 || tx >= WORLD_WIDTH || ty < 0 || ty >= WORLD_HEIGHT) return true;
-      const idx = tileIndex(tx, ty);
+      if (tx < 0 || tx >= map.width || ty < 0 || ty >= map.height) return true;
+      const idx = tileIndex(tx, ty, map.width);
       if (isTileSolid(map.ground[idx], map.objects[idx])) {
         return true;
       }
@@ -833,12 +859,14 @@ export class RealtimeRoomManager {
     const layer = msg.layer === 'ground' ? 'ground' : 'object';
     const tileId = Math.floor(Number(msg.tileId));
 
+    const { width, height } = session.map;
+
     const reject = (reason: string) => {
       const currentTileId =
-        tileX >= 0 && tileX < WORLD_WIDTH && tileY >= 0 && tileY < WORLD_HEIGHT
+        tileX >= 0 && tileX < width && tileY >= 0 && tileY < height
           ? layer === 'ground'
-            ? session.map.ground[tileIndex(tileX, tileY)]
-            : session.map.objects[tileIndex(tileX, tileY)]
+            ? session.map.ground[tileIndex(tileX, tileY, width)]
+            : session.map.objects[tileIndex(tileX, tileY, width)]
           : 0;
       this.send(player.socket, {
         v: PROTOCOL_VERSION,
@@ -864,7 +892,7 @@ export class RealtimeRoomManager {
     }
 
     // Bounds check
-    if (tileX < 0 || tileX >= WORLD_WIDTH || tileY < 0 || tileY >= WORLD_HEIGHT) {
+    if (tileX < 0 || tileX >= width || tileY < 0 || tileY >= height) {
       return reject('Outside village bounds.');
     }
 
@@ -872,12 +900,16 @@ export class RealtimeRoomManager {
     if (session.room.buildPolicy === 'host_only' && player.role === 'player') {
       return reject('Only the host can build in this village.');
     }
-    if (session.room.buildPolicy === 'build_zones' && player.role === 'player' && !isInBuildZone(tileX, tileY)) {
-      return reject('Building is restricted to the marked meadow and garden zones.');
+    if (
+      session.room.buildPolicy === 'build_zones' &&
+      player.role === 'player' &&
+      !isInBuildZone(tileX, tileY, width, height)
+    ) {
+      return reject('Building is restricted to the marked neighborhood build zones.');
     }
 
-    // Protect spawn pad, central well, and lakeside lantern tower
-    if (isProtectedLandmarkTile(tileX, tileY)) {
+    // Protect spawn pad and central well landmarks
+    if (isProtectedLandmarkTile(tileX, tileY, width, height)) {
       return reject('Village landmarks and the central well are protected.');
     }
 
@@ -895,7 +927,7 @@ export class RealtimeRoomManager {
       return reject('Invalid object tile selected.');
     }
 
-    const idx = tileIndex(tileX, tileY);
+    const idx = tileIndex(tileX, tileY, width);
     const nextGround = layer === 'ground' ? tileId : session.map.ground[idx];
     const nextObj = layer === 'object' ? tileId : session.map.objects[idx];
 
@@ -921,7 +953,7 @@ export class RealtimeRoomManager {
     const entry = player.undoStack.pop();
     if (!entry) return;
 
-    const idx = tileIndex(entry.tileX, entry.tileY);
+    const idx = tileIndex(entry.tileX, entry.tileY, session.map.width);
     const currentTile =
       entry.layer === 'ground' ? session.map.ground[idx] : session.map.objects[idx];
     if (currentTile === entry.oldTile) return;
@@ -950,7 +982,7 @@ export class RealtimeRoomManager {
     requestId: string | undefined,
     pushToUndo: boolean
   ) {
-    const idx = tileIndex(tileX, tileY);
+    const idx = tileIndex(tileX, tileY, session.map.width);
     if (layer === 'ground') {
       session.map.ground[idx] = newTile;
     } else {
@@ -965,8 +997,8 @@ export class RealtimeRoomManager {
     }
 
     session.saveVersion += 1;
-    const chunkX = Math.floor(tileX / CHUNK_SIZE);
-    const chunkY = Math.floor(tileY / CHUNK_SIZE);
+    const chunkX = Math.floor(tileX / session.chunkSize);
+    const chunkY = Math.floor(tileY / session.chunkSize);
     session.dirtyChunks.add(`${chunkX},${chunkY}`);
     session.pendingEdits.push({
       actorUid: player.uid,
@@ -1101,7 +1133,8 @@ export class RealtimeRoomManager {
         session.map,
         chunksToFlush,
         editsToFlush,
-        session.saveVersion
+        session.saveVersion,
+        session.chunkSize
       );
     } catch {
       // Re-queue dirty chunks if transient flush error occurred

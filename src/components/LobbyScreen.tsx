@@ -334,7 +334,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               </div>
 
               <div className="border-t border-[#ECE9DF] pt-4 text-xs text-[#616E67]">
-                World Template: <strong className="font-medium text-[#1C2420]">Pixelfield Starter Village</strong>
+                World Map: <strong className="font-medium text-[#1C2420]">Pixelfield Village · 192 × 144</strong>
               </div>
 
               {isHost && (

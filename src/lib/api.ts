@@ -97,6 +97,7 @@ export const api = {
     allowLateJoin: boolean;
     buildPolicy: BuildPolicy;
     password?: string;
+    seed?: number;
   }) =>
     apiFetch<{ room: RoomSummary; reconnectToken: string }>('/api/rooms', {
       method: 'POST',

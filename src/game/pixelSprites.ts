@@ -137,6 +137,52 @@ function makeSandShore(): HTMLCanvasElement {
   return c;
 }
 
+function makeGrassTuft(variant: number): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  px(ctx, 0, 0, 24, 24, '#6FA34B');
+  px(ctx, (variant * 6) % 16, (variant * 5) % 16, 6, 4, '#659842');
+  // Richer clustered meadow grass tuft
+  const tufts: Array<[number, number]> = [
+    [5, 8],
+    [13, 15],
+    [16, 6],
+  ];
+  for (const [tx, ty] of tufts) {
+    px(ctx, tx, ty + 1, 5, 2, '#4A7830');
+    px(ctx, tx + 1, ty - 1, 1, 3, '#588B3A');
+    px(ctx, tx + 2, ty - 2, 1, 4, '#7FB859');
+    px(ctx, tx + 3, ty, 1, 3, '#588B3A');
+  }
+  return c;
+}
+
+function makeBridge(): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  // Sparkling water glimpsed at edges
+  px(ctx, 0, 0, 24, 24, '#2E86AB');
+  // Timber bridge rails top and bottom
+  px(ctx, 0, 1, 24, 3, '#5C3A21');
+  px(ctx, 0, 2, 24, 1, '#8C5B36');
+  px(ctx, 0, 20, 24, 3, '#5C3A21');
+  px(ctx, 0, 21, 24, 1, '#8C5B36');
+  // Vertical deck planks
+  for (let x = 0; x < 24; x += 6) {
+    px(ctx, x, 4, 5, 16, x % 12 === 0 ? '#A8734A' : '#9B6841');
+    px(ctx, x, 4, 1, 16, '#C28D62');
+    px(ctx, x + 5, 4, 1, 16, '#6E472B');
+  }
+  return c;
+}
+
+function makeRoadEdge(): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  px(ctx, 0, 0, 24, 24, '#8A8F89');
+  px(ctx, 1, 1, 22, 22, '#9FA49E');
+  px(ctx, 2, 2, 20, 2, '#B8BDB7');
+  px(ctx, 2, 20, 20, 2, '#737873');
+  return c;
+}
+
 function makeWaterFrame(frame: number): HTMLCanvasElement {
   const [c, ctx] = createTileCanvas();
   px(ctx, 0, 0, 24, 24, '#2E86AB');
@@ -417,6 +463,47 @@ function makeObjectSprite(tile: ObjectTile): HTMLCanvasElement {
       px(ctx, 8, 11, 8, 2, '#C9A86A'); // mooring rope wrap
       break;
     }
+    case ObjectTile.WINDOW: {
+      // Timber-framed sunlit cottage window wall tile
+      px(ctx, 0, 0, 24, 24, '#E8DCC4');
+      px(ctx, 0, 0, 24, 3, '#6F492C');
+      px(ctx, 0, 21, 24, 3, '#5C3B22');
+      px(ctx, 0, 0, 3, 24, '#6F492C');
+      px(ctx, 21, 0, 3, 24, '#5C3B22');
+      px(ctx, 5, 4, 14, 13, '#4B321E');
+      px(ctx, 6, 5, 12, 11, '#F6CE73');
+      px(ctx, 7, 6, 4, 4, '#FFF3B0');
+      px(ctx, 11, 5, 2, 11, '#4B321E');
+      px(ctx, 6, 10, 12, 2, '#4B321E');
+      px(ctx, 4, 17, 16, 2, '#7D5434');
+      break;
+    }
+    case ObjectTile.CRATE: {
+      px(ctx, 4, 19, 16, 3, 'rgba(18, 25, 20, 0.28)');
+      px(ctx, 4, 5, 16, 15, '#6F472B');
+      px(ctx, 5, 6, 14, 13, '#A67247');
+      px(ctx, 6, 7, 12, 11, '#BD875A');
+      // Diagonal brace & nails
+      px(ctx, 6, 7, 12, 2, '#875935');
+      px(ctx, 6, 16, 12, 2, '#875935');
+      px(ctx, 11, 7, 2, 11, '#875935');
+      px(ctx, 7, 8, 1, 1, '#3B281B');
+      px(ctx, 16, 8, 1, 1, '#3B281B');
+      px(ctx, 7, 16, 1, 1, '#3B281B');
+      px(ctx, 16, 16, 1, 1, '#3B281B');
+      break;
+    }
+    case ObjectTile.BUSH: {
+      px(ctx, 4, 18, 16, 4, 'rgba(18, 30, 18, 0.28)');
+      px(ctx, 4, 9, 16, 10, '#27592B');
+      px(ctx, 5, 7, 14, 10, '#367538');
+      px(ctx, 7, 6, 10, 7, '#4B9449');
+      px(ctx, 8, 8, 4, 3, '#6EB85E');
+      // Subtle wild berries
+      px(ctx, 7, 13, 2, 2, '#D9534F');
+      px(ctx, 14, 11, 2, 2, '#F4C430');
+      break;
+    }
     default:
       break;
   }
@@ -429,11 +516,14 @@ export function getSpriteAtlas(): SpriteAtlas {
   const ground = new Map<number, HTMLCanvasElement[]>();
   ground.set(GroundTile.GRASS, [0, 1, 2, 3].map((v) => makeGrassVariant(v, false)));
   ground.set(GroundTile.GRASS_FLOWERS, [0, 1, 2, 3].map((v) => makeGrassVariant(v, true)));
+  ground.set(GroundTile.GRASS_TUFT, [0, 1, 2].map((v) => makeGrassTuft(v)));
   ground.set(GroundTile.STONE_PATH, [0, 1].map((v) => makeStonePath(v)));
+  ground.set(GroundTile.ROAD_EDGE, [makeRoadEdge()]);
   ground.set(GroundTile.DIRT_SOIL, [makeDirtSoil()]);
   ground.set(GroundTile.WOOD_FLOOR, [makeWoodFloor()]);
   ground.set(GroundTile.SAND_SHORE, [makeSandShore()]);
   ground.set(GroundTile.PLAZA_STONE, [makePlazaStone()]);
+  ground.set(GroundTile.BRIDGE, [makeBridge()]);
   const waterFrames = [0, 1, 2, 3].map((f) => makeWaterFrame(f));
   ground.set(GroundTile.WATER, waterFrames);
 

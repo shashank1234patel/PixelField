@@ -81,6 +81,7 @@ export async function createRoomWithWorld(params: {
   allowLateJoin?: boolean;
   buildPolicy?: BuildPolicy;
   password?: string;
+  seed?: number;
 }): Promise<{ room: RoomSummary; reconnectToken: string }> {
   const cleanName = sanitizePlainText(params.name, 42);
   if (cleanName.length < 2) {
@@ -109,8 +110,16 @@ export async function createRoomWithWorld(params: {
     shortCode = generateShortCode(6);
   }
 
-  const starterMap = generateStarterVillage();
-  const chunks = packMapToChunks(starterMap);
+  const parsedSeed =
+    params.seed !== undefined && params.seed !== null && String(params.seed).trim() !== ''
+      ? Number(params.seed)
+      : NaN;
+  const safeSeed = Number.isFinite(parsedSeed)
+    ? (parsedSeed >>> 0) || 1
+    : Math.floor(Math.random() * 1_000_000) + 1;
+
+  const starterMap = generateStarterVillage(safeSeed, WORLD_WIDTH, WORLD_HEIGHT);
+  const chunks = packMapToChunks(starterMap, CHUNK_SIZE);
 
   try {
     const [insertedRoom] = await db
@@ -133,10 +142,10 @@ export async function createRoomWithWorld(params: {
     await db.insert(worlds).values({
       id: worldId,
       roomId,
-      width: WORLD_WIDTH,
-      height: WORLD_HEIGHT,
+      width: starterMap.width,
+      height: starterMap.height,
       chunkSize: CHUNK_SIZE,
-      mapVersion: 1,
+      mapVersion: 2,
       saveVersion: 1,
     });
 
@@ -251,6 +260,7 @@ export async function authorizeRoomJoin(params: {
   reconnectToken: string;
   lastX: number;
   lastY: number;
+  hasSavedPosition: boolean;
 }> {
   const { room, userUid, password, reconnectToken, activePlayerUids } = params;
 
@@ -341,6 +351,7 @@ export async function authorizeRoomJoin(params: {
       reconnectToken: newReconnectToken,
       lastX,
       lastY,
+      hasSavedPosition: Boolean(existing),
     };
   } catch (error) {
     if (error instanceof Error && (
@@ -359,6 +370,9 @@ export async function authorizeRoomJoin(params: {
 
 export async function loadWorldForRoom(roomId: string): Promise<{
   worldId: string;
+  width: number;
+  height: number;
+  chunkSize: number;
   saveVersion: number;
   map: WorldMapData;
   chunks: ChunkRecord[];
@@ -379,12 +393,19 @@ export async function loadWorldForRoom(roomId: string): Promise<{
       revision: ch.revision,
     }));
 
-    const map = chunks.length > 0 ? unpackChunksToMap(chunks) : generateStarterVillage();
+    const chunkSize = world.chunkSize || CHUNK_SIZE;
+    const map =
+      chunks.length > 0
+        ? unpackChunksToMap(chunks, world.width, world.height, chunkSize)
+        : generateStarterVillage(1, world.width, world.height);
     return {
       worldId: world.id,
+      width: world.width,
+      height: world.height,
+      chunkSize,
       saveVersion: world.saveVersion,
       map,
-      chunks: chunks.length > 0 ? chunks : packMapToChunks(map),
+      chunks: chunks.length > 0 ? chunks : packMapToChunks(map, chunkSize),
     };
   } catch (error) {
     console.error('Failed to load world chunks:', error);
@@ -398,7 +419,8 @@ export async function flushDirtyWorldChunks(
   map: WorldMapData,
   dirtyChunkKeys: Set<string>,
   pendingEdits: PendingEditLog[],
-  nextSaveVersion: number
+  nextSaveVersion: number,
+  chunkSize = CHUNK_SIZE
 ): Promise<void> {
   if (dirtyChunkKeys.size === 0 && pendingEdits.length === 0) return;
 
@@ -411,13 +433,18 @@ export async function flushDirtyWorldChunks(
       const g: number[] = [];
       const o: number[] = [];
 
-      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
-        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-          const wx = cx * CHUNK_SIZE + lx;
-          const wy = cy * CHUNK_SIZE + ly;
-          const idx = tileIndex(wx, wy);
-          g.push(map.ground[idx] ?? 0);
-          o.push(map.objects[idx] ?? 0);
+      for (let ly = 0; ly < chunkSize; ly++) {
+        for (let lx = 0; lx < chunkSize; lx++) {
+          const wx = cx * chunkSize + lx;
+          const wy = cy * chunkSize + ly;
+          if (wx < map.width && wy < map.height) {
+            const idx = tileIndex(wx, wy, map.width);
+            g.push(map.ground[idx] ?? 0);
+            o.push(map.objects[idx] ?? 0);
+          } else {
+            g.push(0);
+            o.push(0);
+          }
         }
       }
 

@@ -95,6 +95,7 @@ const ActiveRoomContainer: React.FC<ActiveRoomContainerProps> = ({
       chatMessages={socket.chatMessages}
       connectionState={socket.connectionState}
       canUndo={socket.canUndo}
+      worldVersion={socket.worldVersion}
       toast={socket.toast}
       reducedMotion={user.reducedMotion}
       mapRef={socket.mapRef}

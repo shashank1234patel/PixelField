@@ -9,7 +9,6 @@ import {
   LogOut,
   Plus,
   RefreshCw,
-  Settings,
   Trash2,
   Users,
   X,
@@ -84,6 +83,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [allowLateJoin, setAllowLateJoin] = useState(true);
   const [buildPolicy, setBuildPolicy] = useState<BuildPolicy>('everyone');
   const [roomPassword, setRoomPassword] = useState('');
+  const [mapSeed, setMapSeed] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -156,6 +156,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     setCreateError(null);
     setCreating(true);
     try {
+      const parsedSeed = mapSeed.trim() ? Number(mapSeed.trim()) : undefined;
       const res = await api.createRoom({
         name: roomName.trim(),
         visibility,
@@ -163,6 +164,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         allowLateJoin,
         buildPolicy,
         password: roomPassword.trim() || undefined,
+        seed: parsedSeed !== undefined && Number.isFinite(parsedSeed) ? parsedSeed : undefined,
       });
       saveReconnectCredential(res.room.id, res.reconnectToken);
       setShowCreateModal(false);
@@ -309,7 +311,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               onClick={() => setShowProfileModal(true)}
               className="hover:text-[#1C2420] transition-colors whitespace-nowrap shrink-0 pb-0.5"
             >
-              {user.displayName}
+              Profile
             </button>
           </nav>
 
@@ -399,14 +401,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 >
                   <Plus className="h-4 w-4" />
                   <span>Create World</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowProfileModal(true)}
-                  className="flex items-center gap-2 rounded-lg border border-[#D4D1C5] bg-white px-4 py-2.5 text-sm font-medium text-[#1C2420] hover:bg-[#FAF9F5] transition-colors whitespace-nowrap shrink-0"
-                >
-                  <Settings className="h-4 w-4 text-[#525E57]" />
-                  <span>Profile</span>
                 </button>
               </div>
             </div>
@@ -688,7 +682,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <h2 id="create-room-title" className="font-display text-2xl font-semibold text-[#1C2420]">
                   Create a Village World
                 </h2>
-                <p className="text-xs text-[#5A6660]">Pixelfield Starter Map · 64 × 48 tiles</p>
+                <p className="text-xs text-[#5A6660]">Pixelfield Village Map · 192 × 144 tiles</p>
               </div>
               <button
                 type="button"
@@ -785,18 +779,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </div>
               </div>
 
-              <div>
-                <label htmlFor="create-pw" className="block text-sm font-medium text-[#1C2420]">
-                  Optional room password
-                </label>
-                <input
-                  id="create-pw"
-                  type="password"
-                  value={roomPassword}
-                  onChange={(e) => setRoomPassword(e.target.value)}
-                  placeholder="Leave blank for no password"
-                  className="mt-1.5 w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] px-3.5 py-2 text-sm text-[#1C2420] placeholder:text-[#8E9992] focus:border-[#2D6A4F] focus:bg-white focus:outline-none"
-                />
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="create-pw" className="block text-sm font-medium text-[#1C2420]">
+                    Optional password
+                  </label>
+                  <input
+                    id="create-pw"
+                    type="password"
+                    value={roomPassword}
+                    onChange={(e) => setRoomPassword(e.target.value)}
+                    placeholder="No password"
+                    className="mt-1.5 w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] px-3.5 py-2 text-sm text-[#1C2420] placeholder:text-[#8E9992] focus:border-[#2D6A4F] focus:bg-white focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="create-seed" className="block text-sm font-medium text-[#1C2420]">
+                    Map seed (optional)
+                  </label>
+                  <input
+                    id="create-seed"
+                    type="number"
+                    min={1}
+                    max={999999999}
+                    value={mapSeed}
+                    onChange={(e) => setMapSeed(e.target.value)}
+                    placeholder="Random village"
+                    className="mt-1.5 w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] px-3.5 py-2 text-sm font-mono text-[#1C2420] placeholder:font-sans placeholder:text-[#8E9992] focus:border-[#2D6A4F] focus:bg-white focus:outline-none"
+                  />
+                </div>
               </div>
 
               <label className="flex items-start gap-2.5 text-sm text-[#3B4640] cursor-pointer">
@@ -846,14 +858,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             className="w-full max-w-md rounded-xl border border-[#DDD9CA] bg-white p-6 shadow-xl max-h-[92vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between gap-4 border-b border-[#ECE9DF] pb-4">
-              <div>
-                <h2 id="profile-modal-title" className="font-display text-2xl font-semibold text-[#1C2420]">
-                  Villager Profile
-                </h2>
-                <p className="text-xs text-[#5A6660]">
-                  {user.authType === 'google' ? user.email : 'Temporary guest session in this browser'}
-                </p>
-              </div>
+              <h2 id="profile-modal-title" className="font-display text-2xl font-semibold text-[#1C2420]">
+                Profile
+              </h2>
               <button
                 type="button"
                 onClick={() => {
@@ -865,6 +872,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               >
                 <X className="h-5 w-5" />
               </button>
+            </div>
+
+            <div className="mt-4 flex items-center gap-3 rounded-lg border border-[#ECE9DF] bg-[#FAFAF7] p-3.5">
+              <div
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-black/10 text-xs font-bold text-white"
+                style={{ backgroundColor: user.avatarColor }}
+              >
+                {user.displayName.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-sm text-[#1C2420] truncate">{user.displayName}</p>
+                <p className="text-xs text-[#5A6660] truncate">
+                  {user.authType === 'google' ? user.email : 'Guest session'}
+                </p>
+              </div>
             </div>
 
             {user.authType === 'guest' && (

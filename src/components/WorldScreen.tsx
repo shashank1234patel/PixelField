@@ -10,6 +10,7 @@ import {
   Hammer,
   HelpCircle,
   LogOut,
+  Map as MapIcon,
   MessageSquare,
   RotateCcw,
   Send,
@@ -34,7 +35,7 @@ import type {
   RoomVisibility,
 } from '../shared/protocol.ts';
 import type { WorldMapData } from '../shared/starterMap.ts';
-import { BUILD_PALETTE, type PaletteItem, type TileLayer } from '../shared/tiles.ts';
+import { BUILD_PALETTE, type PaletteItem, SPAWN_TILE, type TileLayer } from '../shared/tiles.ts';
 import { VillageCanvas } from './VillageCanvas.tsx';
 
 interface WorldScreenProps {
@@ -44,6 +45,7 @@ interface WorldScreenProps {
   chatMessages: ChatMessagePayload[];
   connectionState: ConnectionState;
   canUndo: boolean;
+  worldVersion: number;
   toast: { id: number; text: string; tone: 'info' | 'error' } | null;
   reducedMotion: boolean;
   mapRef: React.RefObject<WorldMapData | null>;
@@ -72,6 +74,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   chatMessages,
   connectionState,
   canUndo,
+  worldVersion,
   toast,
   reducedMotion,
   mapRef,
@@ -92,7 +95,10 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   const [showAllPalette, setShowAllPalette] = useState(false);
   const [zoom, setZoom] = useState(2);
   const [mutedAudio, setMutedAudio] = useState(false);
-  const [coords, setCoords] = useState({ x: 31, y: 26 });
+  const [coords, setCoords] = useState({ x: SPAWN_TILE.x, y: SPAWN_TILE.y });
+  const [showMinimap, setShowMinimap] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
 
   const [panelOpen, setPanelOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
@@ -147,6 +153,8 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         setBuildMode((m) => (m === 'build' ? 'break' : 'build'));
       } else if (e.key.toLowerCase() === 'z' && !e.metaKey && !e.ctrlKey) {
         onRequestUndo();
+      } else if (e.key.toLowerCase() === 'm') {
+        setShowMinimap((v) => !v);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         setPanelOpen(true);
@@ -211,6 +219,8 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         buildPolicy={room.buildPolicy}
         zoom={zoom}
         reducedMotion={reducedMotion}
+        showMinimap={showMinimap}
+        worldVersion={worldVersion}
         onSendMove={onSendMove}
         onRequestEdit={onRequestEdit}
         onCoordsChange={(x, y) => setCoords({ x, y })}
@@ -263,7 +273,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-white/12 bg-[#16201C]/90 p-1.5 backdrop-blur-sm">
           <button
             type="button"
-            onClick={() => setZoom((z) => Math.max(1.5, z - 0.5))}
+            onClick={() => setZoom((z) => Math.max(1, z - 0.5))}
             title="Zoom out"
             aria-label="Zoom out"
             className="hidden sm:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
@@ -278,6 +288,20 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
             className="hidden sm:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
           >
             <ZoomIn className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMinimap((v) => !v)}
+            title="Toggle village minimap (M)"
+            aria-label="Toggle village minimap"
+            className={`flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap ${
+              showMinimap
+                ? 'bg-[#2D6A4F] text-white'
+                : 'text-[#C7D4CC] hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <MapIcon className="h-4 w-4" />
+            <span className="hidden md:inline">Map</span>
           </button>
           <button
             type="button"
@@ -549,7 +573,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
       {/* Bottom Compact Hotbar & Expandable Full Tile Tray */}
       <div className="pointer-events-none fixed inset-x-0 bottom-3 z-30 flex flex-col items-center gap-2 px-3">
         {showAllPalette && (
-          <div className="pointer-events-auto grid max-w-xl grid-cols-5 gap-1.5 rounded-xl border border-white/14 bg-[#16201C]/95 p-3 shadow-xl backdrop-blur-md sm:grid-cols-5">
+          <div className="pointer-events-auto grid max-h-60 max-w-xl grid-cols-5 gap-1.5 overflow-y-auto rounded-xl border border-white/14 bg-[#16201C]/95 p-3 shadow-xl backdrop-blur-md sm:grid-cols-5">
             {BUILD_PALETTE.map((item) => {
               const active = buildMode === 'build' && selectedItem.id === item.id;
               return (
@@ -791,12 +815,16 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                 <dd className="font-mono text-white">Key Z</dd>
               </div>
               <div className="flex justify-between gap-4">
+                <dt className="text-[#A8B8AF]">Toggle minimap</dt>
+                <dd className="font-mono text-white">Key M</dd>
+              </div>
+              <div className="flex justify-between gap-4">
                 <dt className="text-[#A8B8AF]">Open room chat</dt>
                 <dd className="font-mono text-white">Enter</dd>
               </div>
             </dl>
             <p className="mt-4 border-t border-white/10 pt-3 text-xs leading-relaxed text-[#9BB0A4]">
-              All builds autosave to the server every few seconds. The central village well and lakeside lantern tower are protected landmarks.
+              All builds autosave every few seconds. The central village well and spawn pad are protected landmarks.
             </p>
           </div>
         </div>
