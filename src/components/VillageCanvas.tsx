@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Hammer, Eraser } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Search } from 'lucide-react';
 import { drawVillagerSprite, getSpriteAtlas } from '../game/pixelSprites.ts';
 import type { LivePlayerEntity } from '../hooks/useRoomSocket.ts';
-import type { BuildPolicy, FacingDir } from '../shared/protocol.ts';
+import {
+  type AdventureNodeDef,
+  type AdventureState,
+  getAdventureNodesForMap,
+} from '../shared/adventureData.ts';
+import type { FacingDir } from '../shared/protocol.ts';
 import type { WorldMapData } from '../shared/starterMap.ts';
 import {
   GroundTile,
   ObjectTile,
-  type PaletteItem,
   SPAWN_TILE,
   TILE_SIZE,
-  type TileLayer,
-  isInBuildZone,
-  isProtectedLandmarkTile,
   isTileSolid,
   tileIndex,
 } from '../shared/tiles.ts';
@@ -21,20 +22,22 @@ interface VillageCanvasProps {
   mapRef: React.RefObject<WorldMapData | null>;
   playersRef: React.RefObject<Map<string, LivePlayerEntity>>;
   selfUid: string | null;
-  buildMode: 'build' | 'break';
-  selectedItem: PaletteItem;
-  buildPolicy: BuildPolicy;
+  adventure: AdventureState;
   zoom: number;
   reducedMotion: boolean;
   showMinimap: boolean;
   worldVersion: number;
+  interactionDisabled?: boolean;
   onSendMove: (seq: number, x: number, y: number, facing: FacingDir, walking: boolean) => void;
-  onRequestEdit: (tileX: number, tileY: number, layer: TileLayer, tileId: number) => void;
+  onInspectNode: (node: AdventureNodeDef) => void;
+  onNearbyNodeChange?: (node: AdventureNodeDef | null) => void;
   onCoordsChange?: (x: number, y: number) => void;
 }
 
-const MOVE_SPEED = 5.4; // tiles/sec
-const MAX_REACH = 6.2;
+const MOVE_SPEED = 5.6; // tiles/sec
+const INTERACT_RANGE = 2.8;
+const CLICK_INTERACT_RANGE = 3.8;
+const SHIMMER_RANGE = 4.4;
 
 function getMinimapColor(ground: number, obj: number): string {
   if (obj !== ObjectTile.NONE) {
@@ -48,7 +51,25 @@ function getMinimapColor(ground: number, obj: number): string {
       case ObjectTile.WINDOW:
         return '#A57548';
       case ObjectTile.STONE_WALL:
+      case ObjectTile.RUIN_PILLAR:
         return '#8D959C';
+      case ObjectTile.CAVERN_WALL:
+        return '#4B5451';
+      case ObjectTile.HIDDEN_DOOR_CLOSED:
+        return '#6C736B';
+      case ObjectTile.HIDDEN_DOOR_OPEN:
+        return '#334039';
+      case ObjectTile.CHEST_LOCKED:
+        return '#E8B84B';
+      case ObjectTile.CHEST_OPENED:
+        return '#B9924A';
+      case ObjectTile.NOTE_SCROLL:
+      case ObjectTile.RELIC_SATCHEL:
+        return '#F4E5B8';
+      case ObjectTile.ANCIENT_STATUE:
+        return '#9BD4B7';
+      case ObjectTile.BOUNDARY_STONE:
+        return '#A5B2A8';
       case ObjectTile.TREE_OAK:
         return '#2E6A34';
       case ObjectTile.TREE_PINE:
@@ -93,6 +114,12 @@ function getMinimapColor(ground: number, obj: number): string {
       return '#8B9297';
     case GroundTile.PLAZA_STONE:
       return '#C0C4C7';
+    case GroundTile.RUIN_FLOOR:
+      return '#8E948C';
+    case GroundTile.PRESSURE_PLATE:
+      return '#D6B667';
+    case GroundTile.FOOTPRINTS:
+      return '#755B40';
     case GroundTile.DIRT_SOIL:
       return '#8B6242';
     case GroundTile.SAND_SHORE:
@@ -124,19 +151,39 @@ function collides(map: WorldMapData, x: number, y: number): boolean {
   return false;
 }
 
+function isNodeInteractable(node: AdventureNodeDef, adventure: AdventureState): boolean {
+  if ((node.kind === 'satchel' || node.kind === 'curio') && node.itemId) {
+    if (adventure.collectedItems.includes(node.itemId)) return false;
+  }
+  return true;
+}
+
+function isNodeFreshOrActive(node: AdventureNodeDef, adventure: AdventureState): boolean {
+  if (!isNodeInteractable(node, adventure)) return false;
+  if (node.kind === 'chest' && adventure.openedChests.includes(node.id)) return false;
+  if (node.kind === 'puzzle_altar' && adventure.solvedPuzzles.includes(node.id)) return false;
+  if ((node.kind === 'pressure_plate' || node.kind === 'hidden_door') && adventure.hiddenDoorOpen) {
+    return false;
+  }
+  if (node.clueId && !adventure.discoveredClues.includes(node.clueId)) return true;
+  if (node.itemId && !adventure.collectedItems.includes(node.itemId)) return true;
+  if (!adventure.inspectedNodes.includes(node.id)) return true;
+  return false;
+}
+
 export const VillageCanvas: React.FC<VillageCanvasProps> = ({
   mapRef,
   playersRef,
   selfUid,
-  buildMode,
-  selectedItem,
-  buildPolicy,
+  adventure,
   zoom,
   reducedMotion,
   showMinimap,
   worldVersion,
+  interactionDisabled = false,
   onSendMove,
-  onRequestEdit,
+  onInspectNode,
+  onNearbyNodeChange,
   onCoordsChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -144,40 +191,43 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
   const minimapBaseRef = useRef<HTMLCanvasElement | null>(null);
   const minimapVersionRef = useRef<number>(-1);
   const minimapMapRef = useRef<WorldMapData | null>(null);
+  const nodesCacheRef = useRef<{ w: number; h: number; nodes: AdventureNodeDef[] } | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
   const dpadRef = useRef({ up: false, down: false, left: false, right: false });
-  const hoverTileRef = useRef<{ x: number; y: number } | null>(null);
+  const hoverNodeIdRef = useRef<string | null>(null);
+  const nearbyNodeRef = useRef<AdventureNodeDef | null>(null);
   const cameraRef = useRef({ x: SPAWN_TILE.x * TILE_SIZE, y: SPAWN_TILE.y * TILE_SIZE });
   const cameraInitializedRef = useRef(false);
   const moveSeqRef = useRef(1);
   const lastSentMoveRef = useRef({ t: 0, x: -1, y: -1, facing: 'down' as FacingDir, walking: false });
   const lastReportedCoordRef = useRef({ x: -1, y: -1 });
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const [touchNearbyName, setTouchNearbyName] = useState<string | null>(null);
 
   const propsRef = useRef({
     selfUid,
-    buildMode,
-    selectedItem,
-    buildPolicy,
+    adventure,
     zoom,
     reducedMotion,
     showMinimap,
     worldVersion,
+    interactionDisabled,
     onSendMove,
-    onRequestEdit,
+    onInspectNode,
+    onNearbyNodeChange,
     onCoordsChange,
   });
   propsRef.current = {
     selfUid,
-    buildMode,
-    selectedItem,
-    buildPolicy,
+    adventure,
     zoom,
     reducedMotion,
     showMinimap,
     worldVersion,
+    interactionDisabled,
     onSendMove,
-    onRequestEdit,
+    onInspectNode,
+    onNearbyNodeChange,
     onCoordsChange,
   };
 
@@ -187,53 +237,33 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
     setIsTouchDevice(touchCapable);
   }, []);
 
-  const triggerEditAt = (tx: number, ty: number) => {
+  const getNodesForCurrentMap = (): AdventureNodeDef[] => {
     const map = mapRef.current;
-    if (!map) return;
-    if (tx < 0 || tx >= map.width || ty < 0 || ty >= map.height) return;
-    const { buildMode: mode, selectedItem: item, onRequestEdit: editFn } = propsRef.current;
-    if (mode === 'break') {
-      const idx = tileIndex(tx, ty, map.width);
-      if (map.objects[idx] !== ObjectTile.NONE) {
-        editFn(tx, ty, 'object', ObjectTile.NONE);
-      } else if (map.ground[idx] !== GroundTile.GRASS) {
-        editFn(tx, ty, 'ground', GroundTile.GRASS);
-      }
-    } else {
-      editFn(tx, ty, item.layer, item.tileId);
+    if (!map) return [];
+    const cached = nodesCacheRef.current;
+    if (cached && cached.w === map.width && cached.h === map.height) {
+      return cached.nodes;
     }
+    const nodes = getAdventureNodesForMap(map.width, map.height);
+    nodesCacheRef.current = { w: map.width, h: map.height, nodes };
+    return nodes;
   };
 
-  const triggerActionInFront = () => {
-    const uid = propsRef.current.selfUid;
-    if (!uid) return;
-    const self = playersRef.current?.get(uid);
-    if (!self) return;
-    const offsets: Record<FacingDir, [number, number]> = {
-      up: [0, -1],
-      down: [0, 1],
-      left: [-1, 0],
-      right: [1, 0],
-    };
-    const [ox, oy] = offsets[self.facing];
-    triggerEditAt(Math.round(self.renderX + ox), Math.round(self.renderY + oy));
-  };
-
-  // Keyboard listener (ignores input/textarea focus)
+  // Keyboard movement + E / Space inspection
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (propsRef.current.interactionDisabled) return;
+
       const key = e.key.toLowerCase();
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
         e.preventDefault();
         keysRef.current.add(key);
-      } else if (key === ' ') {
-        e.preventDefault();
-        if (hoverTileRef.current) {
-          triggerEditAt(hoverTileRef.current.x, hoverTileRef.current.y);
-        } else {
-          triggerActionInFront();
+      } else if (key === 'e' || key === ' ') {
+        if (nearbyNodeRef.current) {
+          e.preventDefault();
+          propsRef.current.onInspectNode(nearbyNodeRef.current);
         }
       }
     };
@@ -256,6 +286,14 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
       window.removeEventListener('blur', onBlur);
     };
   }, []);
+
+  // Release held movement keys whenever a modal opens
+  useEffect(() => {
+    if (interactionDisabled) {
+      keysRef.current.clear();
+      dpadRef.current = { up: false, down: false, left: false, right: false };
+    }
+  }, [interactionDisabled]);
 
   // Main 60 FPS Canvas Game Loop
   useEffect(() => {
@@ -290,14 +328,14 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
 
       const {
         selfUid: uid,
-        buildMode: mode,
-        selectedItem: item,
-        buildPolicy: policy,
+        adventure: currentAdv,
         zoom: currentZoom,
         reducedMotion: lowEffects,
         showMinimap: minimapVisible,
         worldVersion: currentWorldVersion,
+        interactionDisabled: modalOpen,
         onSendMove: sendMoveFn,
+        onNearbyNodeChange: reportNearby,
         onCoordsChange: reportCoords,
       } = propsRef.current;
 
@@ -306,6 +344,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
       const viewW = canvas.clientWidth;
       const viewH = canvas.clientHeight;
       const scaledTile = TILE_SIZE * currentZoom;
+      const nodes = getNodesForCurrentMap();
 
       // 1. Update local player movement & remote interpolation
       const self = uid && playersMap ? playersMap.get(uid) : null;
@@ -314,10 +353,12 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         const pad = dpadRef.current;
         let dx = 0;
         let dy = 0;
-        if (keys.has('w') || keys.has('arrowup') || pad.up) dy -= 1;
-        if (keys.has('s') || keys.has('arrowdown') || pad.down) dy += 1;
-        if (keys.has('a') || keys.has('arrowleft') || pad.left) dx -= 1;
-        if (keys.has('d') || keys.has('arrowright') || pad.right) dx += 1;
+        if (!modalOpen) {
+          if (keys.has('w') || keys.has('arrowup') || pad.up) dy -= 1;
+          if (keys.has('s') || keys.has('arrowdown') || pad.down) dy += 1;
+          if (keys.has('a') || keys.has('arrowleft') || pad.left) dx -= 1;
+          if (keys.has('d') || keys.has('arrowright') || pad.right) dx += 1;
+        }
 
         const walking = dx !== 0 || dy !== 0;
         if (walking) {
@@ -343,14 +384,14 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         }
         self.walking = walking;
 
-        // Soft authoritative reconciliation if server corrected position significantly
+        // Soft authoritative reconciliation
         const serverErr = Math.hypot(self.targetX - self.renderX, self.targetY - self.renderY);
         if (serverErr > 1.8) {
           self.renderX += (self.targetX - self.renderX) * 0.25;
           self.renderY += (self.targetY - self.renderY) * 0.25;
         }
 
-        // Send throttled movement intent (~16 Hz) when moving or state transitions
+        // Send throttled movement intent (~16 Hz)
         const last = lastSentMoveRef.current;
         const moved =
           Math.abs(self.renderX - last.x) > 0.015 ||
@@ -370,6 +411,23 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           };
         }
 
+        // Check nearest interactable adventure node within INTERACT_RANGE
+        let closest: AdventureNodeDef | null = null;
+        let closestDist = INTERACT_RANGE;
+        for (const node of nodes) {
+          if (!isNodeInteractable(node, currentAdv)) continue;
+          const dist = Math.hypot(self.renderX - node.x, self.renderY - node.y);
+          if (dist <= closestDist) {
+            closest = node;
+            closestDist = dist;
+          }
+        }
+        if (closest?.id !== nearbyNodeRef.current?.id) {
+          nearbyNodeRef.current = closest;
+          setTouchNearbyName(closest ? closest.name : null);
+          reportNearby?.(closest);
+        }
+
         const rx = Math.round(self.renderX);
         const ry = Math.round(self.renderY);
         if (
@@ -380,7 +438,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           reportCoords(rx, ry);
         }
 
-        // Smooth camera follow clamped to world edges (instant lock on first frame)
+        // Smooth camera follow clamped to world edges
         const targetCamX = (self.renderX + 0.5) * scaledTile - viewW / 2;
         const targetCamY = (self.renderY + 0.5) * scaledTile - viewH / 2;
         const maxCamX = Math.max(0, map.width * scaledTile - viewW);
@@ -446,12 +504,27 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
             if (sprite) {
               ctx.drawImage(sprite, sx, sy, scaledTile, scaledTile);
             }
+          }
+        }
 
-            // Subtle highlight for permitted build zones when policy is 'build_zones'
-            if (policy === 'build_zones' && isInBuildZone(tx, ty, map.width, map.height)) {
-              ctx.fillStyle = 'rgba(255, 243, 176, 0.08)';
-              ctx.fillRect(sx, sy, scaledTile, scaledTile);
-            }
+        // Active Pressure Plate golden glow (no clutter, clear environmental feedback)
+        for (const node of nodes) {
+          if (node.kind !== 'pressure_plate') continue;
+          if (node.x < startCol || node.x > endCol || node.y < startRow || node.y > endRow) continue;
+          const active =
+            currentAdv.hiddenDoorOpen ||
+            (node.id === 'coop_plate_a' && currentAdv.activePlates.plateA) ||
+            (node.id === 'coop_plate_b' && currentAdv.activePlates.plateB);
+          if (active) {
+            const sx = node.x * scaledTile - camX;
+            const sy = node.y * scaledTile - camY;
+            ctx.save();
+            ctx.fillStyle = 'rgba(244, 201, 93, 0.38)';
+            ctx.fillRect(sx + 3, sy + 3, scaledTile - 6, scaledTile - 6);
+            ctx.strokeStyle = '#F7D774';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(sx + 2, sy + 2, scaledTile - 4, scaledTile - 4);
+            ctx.restore();
           }
         }
 
@@ -477,61 +550,58 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           }
         }
 
-        // Hover placement preview
-        const hover = hoverTileRef.current;
-        if (hover && self && hover.x >= startCol && hover.x <= endCol && hover.y >= startRow && hover.y <= endRow) {
-          const sx = hover.x * scaledTile - camX;
-          const sy = hover.y * scaledTile - camY;
-          const inRange = Math.hypot(hover.x - self.renderX, hover.y - self.renderY) <= MAX_REACH;
-          const protectedTile = isProtectedLandmarkTile(hover.x, hover.y, map.width, map.height);
-          const allowedZone =
-            policy !== 'build_zones' ||
-            self.role !== 'player' ||
-            isInBuildZone(hover.x, hover.y, map.width, map.height);
-          const valid = inRange && !protectedTile && allowedZone;
+        // Subtle warm proximity shimmer ONLY on nearby interactable objects (no screen-wide icon clutter)
+        if (self) {
+          for (const node of nodes) {
+            if (!isNodeInteractable(node, currentAdv)) continue;
+            if (node.x < startCol || node.x > endCol || node.y < startRow || node.y > endRow) continue;
+            const dist = Math.hypot(self.renderX - node.x, self.renderY - node.y);
+            const isTargeted = nearbyNodeRef.current?.id === node.id || hoverNodeIdRef.current === node.id;
+            const isFresh = isNodeFreshOrActive(node, currentAdv);
 
-          if (mode === 'build' && valid) {
-            ctx.save();
-            ctx.globalAlpha = 0.62;
-            if (item.layer === 'ground') {
-              const spr = atlas.ground.get(item.tileId)?.[0];
-              if (spr) ctx.drawImage(spr, sx, sy, scaledTile, scaledTile);
-            } else {
-              const spr = atlas.objects.get(item.tileId);
-              if (spr) ctx.drawImage(spr, sx, sy, scaledTile, scaledTile);
+            if (isTargeted || (isFresh && dist <= SHIMMER_RANGE)) {
+              const sx = node.x * scaledTile - camX;
+              const sy = node.y * scaledTile - camY;
+              const pulse = lowEffects ? 0.85 : 0.65 + 0.35 * Math.sin(animTime * 4.5 + node.x);
+
+              ctx.save();
+              ctx.strokeStyle = isTargeted
+                ? `rgba(255, 232, 150, ${0.85 * pulse})`
+                : `rgba(246, 212, 114, ${0.45 * pulse})`;
+              ctx.lineWidth = isTargeted ? 2.5 : 1.5;
+              ctx.strokeRect(sx + 2, sy + 2, scaledTile - 4, scaledTile - 4);
+              ctx.restore();
             }
-            ctx.restore();
           }
-
-          ctx.strokeStyle = !valid
-            ? 'rgba(239, 68, 68, 0.9)'
-            : mode === 'break'
-            ? 'rgba(245, 158, 11, 0.95)'
-            : 'rgba(248, 250, 252, 0.95)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(sx + 1, sy + 1, scaledTile - 2, scaledTile - 2);
         }
 
-        // Depth-sorted Villagers (sorted by renderY so overlapping villagers layer naturally)
+        // Depth-sorted Villagers & Adventure NPCs (Clara & Rowan)
+        type DrawableCharacter = {
+          y: number;
+          screenX: number;
+          screenY: number;
+          avatarColor: string;
+          hatStyle: LivePlayerEntity['hatStyle'];
+          facing: FacingDir;
+          walking: boolean;
+          displayName: string;
+          isSelf: boolean;
+          isHost: boolean;
+          connected: boolean;
+        };
+
+        const chars: DrawableCharacter[] = [];
+
         if (playersMap) {
-          const sorted = Array.from(playersMap.values()).sort((a, b) => a.renderY - b.renderY);
-          for (const p of sorted) {
-            const screenX = (p.renderX + 0.5) * scaledTile - camX;
-            const screenY = (p.renderY + 0.6) * scaledTile - camY;
-            if (
-              screenX < -scaledTile * 2 ||
-              screenX > viewW + scaledTile * 2 ||
-              screenY < -scaledTile * 2 ||
-              screenY > viewH + scaledTile * 2
-            ) {
-              continue;
-            }
-            drawVillagerSprite(ctx, screenX, screenY, currentZoom, {
+          for (const p of playersMap.values()) {
+            chars.push({
+              y: p.renderY,
+              screenX: (p.renderX + 0.5) * scaledTile - camX,
+              screenY: (p.renderY + 0.6) * scaledTile - camY,
               avatarColor: p.avatarColor,
               hatStyle: p.hatStyle,
               facing: p.facing,
               walking: p.walking,
-              animTime,
               displayName: p.displayName,
               isSelf: p.uid === uid,
               isHost: p.role === 'host',
@@ -540,7 +610,48 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           }
         }
 
-        // Warm subtle lantern glow halos (disabled in reduced-motion mode)
+        for (const node of nodes) {
+          if (node.kind === 'npc' && node.npc) {
+            chars.push({
+              y: node.y,
+              screenX: (node.x + 0.5) * scaledTile - camX,
+              screenY: (node.y + 0.6) * scaledTile - camY,
+              avatarColor: node.npc.avatarColor,
+              hatStyle: node.npc.hatStyle,
+              facing: 'down',
+              walking: false,
+              displayName: node.name,
+              isSelf: false,
+              isHost: false,
+              connected: true,
+            });
+          }
+        }
+
+        chars.sort((a, b) => a.y - b.y);
+        for (const c of chars) {
+          if (
+            c.screenX < -scaledTile * 2 ||
+            c.screenX > viewW + scaledTile * 2 ||
+            c.screenY < -scaledTile * 2 ||
+            c.screenY > viewH + scaledTile * 2
+          ) {
+            continue;
+          }
+          drawVillagerSprite(ctx, c.screenX, c.screenY, currentZoom, {
+            avatarColor: c.avatarColor,
+            hatStyle: c.hatStyle,
+            facing: c.facing,
+            walking: c.walking,
+            animTime,
+            displayName: c.displayName,
+            isSelf: c.isSelf,
+            isHost: c.isHost,
+            connected: c.connected,
+          });
+        }
+
+        // Warm subtle lantern glow halos
         if (!lowEffects && lampPositions.length > 0) {
           ctx.save();
           ctx.globalCompositeOperation = 'screen';
@@ -565,7 +676,8 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
           }
           ctx.restore();
         }
-        // 3. Render live minimap when visible
+
+        // 3. Render live minimap when visible (bottom-left)
         if (minimapVisible && minimapCanvasRef.current) {
           const mini = minimapCanvasRef.current;
           if (mini.width !== map.width || mini.height !== map.height) {
@@ -650,33 +762,46 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
     return { x: tx, y: ty };
   };
 
+  const findClickedNode = (tx: number, ty: number): AdventureNodeDef | null => {
+    const nodes = getNodesForCurrentMap();
+    const currentAdv = propsRef.current.adventure;
+    let best: AdventureNodeDef | null = null;
+    let bestDist = 1.35;
+    for (const node of nodes) {
+      if (!isNodeInteractable(node, currentAdv)) continue;
+      const d = Math.hypot(node.x - tx, node.y - ty);
+      if (d <= bestDist) {
+        best = node;
+        bestDist = d;
+      }
+    }
+    return best;
+  };
+
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    hoverTileRef.current = screenToTile(e.clientX, e.clientY);
+    const tile = screenToTile(e.clientX, e.clientY);
+    if (!tile) {
+      hoverNodeIdRef.current = null;
+      return;
+    }
+    const clicked = findClickedNode(tile.x, tile.y);
+    hoverNodeIdRef.current = clicked ? clicked.id : null;
   };
 
   const handlePointerLeave = () => {
-    hoverTileRef.current = null;
+    hoverNodeIdRef.current = null;
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.button === 2) return;
+    if (e.button === 2 || propsRef.current.interactionDisabled) return;
     const tile = screenToTile(e.clientX, e.clientY);
     if (!tile) return;
-    hoverTileRef.current = tile;
-    triggerEditAt(tile.x, tile.y);
-  };
-
-  const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const tile = screenToTile(e.clientX, e.clientY);
-    const map = mapRef.current;
-    if (!tile || !map) return;
-    // Right-click always clears/breaks quickly
-    const idx = tileIndex(tile.x, tile.y, map.width);
-    if (map.objects[idx] !== ObjectTile.NONE) {
-      propsRef.current.onRequestEdit(tile.x, tile.y, 'object', ObjectTile.NONE);
-    } else if (map.ground[idx] !== GroundTile.GRASS) {
-      propsRef.current.onRequestEdit(tile.x, tile.y, 'ground', GroundTile.GRASS);
+    const clicked = findClickedNode(tile.x, tile.y);
+    if (!clicked) return;
+    const uid = propsRef.current.selfUid;
+    const self = uid ? playersRef.current?.get(uid) : null;
+    if (self && Math.hypot(self.renderX - clicked.x, self.renderY - clicked.y) <= CLICK_INTERACT_RANGE) {
+      propsRef.current.onInspectNode(clicked);
     }
   };
 
@@ -703,14 +828,14 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         onPointerMove={handlePointerMove}
         onPointerLeave={handlePointerLeave}
         onPointerDown={handlePointerDown}
-        onContextMenu={handleContextMenu}
-        className="h-full w-full block cursor-crosshair pixelated touch-none"
-        aria-label="Pixelfield interactive multiplayer village world"
+        onContextMenu={(e) => e.preventDefault()}
+        className="h-full w-full block cursor-pointer pixelated touch-none"
+        aria-label="Pixelfield multiplayer treasure-hunt village world"
       />
 
-      {/* Toggleable Live Minimap */}
+      {/* Toggleable Live Minimap (Top-left) */}
       {showMinimap && (
-        <div className="pointer-events-none fixed left-3 top-16 z-20 overflow-hidden rounded-lg border border-white/15 bg-[#16201C]/90 p-1.5 shadow-xl backdrop-blur-sm sm:left-4">
+        <div className="pointer-events-none fixed left-3 top-3 z-20 hidden overflow-hidden rounded-lg border border-white/15 bg-[#16201C]/90 p-1.5 shadow-xl backdrop-blur-sm sm:left-4 md:block">
           <canvas
             ref={minimapCanvasRef}
             className="block h-[132px] w-[176px] rounded-xs pixelated"
@@ -719,7 +844,7 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
         </div>
       )}
 
-      {/* Mobile Touch Controls (shown on touch devices or narrow viewports) */}
+      {/* Mobile Touch Controls */}
       {isTouchDevice && (
         <div className="pointer-events-none fixed inset-x-4 bottom-24 z-20 flex items-end justify-between md:hidden">
           <div className="pointer-events-auto grid grid-cols-3 gap-1.5">
@@ -761,12 +886,21 @@ export const VillageCanvas: React.FC<VillageCanvasProps> = ({
 
           <button
             type="button"
-            onClick={triggerActionInFront}
-            aria-label={buildMode === 'build' ? 'Place tile ahead' : 'Clear tile ahead'}
-            className="pointer-events-auto flex h-14 items-center gap-2 rounded-lg border border-white/20 bg-[#2D6A4F] px-4 text-sm font-semibold text-white shadow-lg active:scale-95"
+            disabled={!touchNearbyName}
+            onClick={() => {
+              if (nearbyNodeRef.current) {
+                propsRef.current.onInspectNode(nearbyNodeRef.current);
+              }
+            }}
+            aria-label={touchNearbyName ? `Inspect ${touchNearbyName}` : 'Walk near an object to inspect'}
+            className={`pointer-events-auto flex h-14 items-center gap-2 rounded-lg border px-4 text-sm font-semibold shadow-lg transition-colors active:scale-95 ${
+              touchNearbyName
+                ? 'border-[#F7D774]/70 bg-[#2D6A4F] text-white'
+                : 'border-white/12 bg-[#1B2622]/75 text-[#8FA096]'
+            }`}
           >
-            {buildMode === 'build' ? <Hammer className="h-4 w-4" /> : <Eraser className="h-4 w-4" />}
-            <span>{buildMode === 'build' ? 'Place' : 'Clear'}</span>
+            <Search className="h-4 w-4" />
+            <span>Inspect</span>
           </button>
         </div>
       )}

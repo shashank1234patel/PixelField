@@ -1,20 +1,21 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  BookOpen,
   Check,
   ChevronDown,
   ChevronUp,
+  Compass,
   Copy,
   Crown,
-  Eraser,
   Flag,
-  Hammer,
   HelpCircle,
   LogOut,
   Map as MapIcon,
   MessageSquare,
-  RotateCcw,
+  Search,
   Send,
   Settings,
+  Sparkles,
   UserMinus,
   Users,
   Volume2,
@@ -23,9 +24,19 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { getPaletteSwatchDataUrl } from '../game/pixelSprites.ts';
 import { soundFx } from '../game/sound.ts';
-import type { ConnectionState, LivePlayerEntity } from '../hooks/useRoomSocket.ts';
+import type {
+  ConnectionState,
+  LivePlayerEntity,
+  PuzzleFeedbackState,
+} from '../hooks/useRoomSocket.ts';
+import {
+  type AdventureNodeDef,
+  type AdventureNotification,
+  type AdventureState,
+  getActiveQuest,
+  getStoryProgressMetrics,
+} from '../shared/adventureData.ts';
 import type {
   BuildPolicy,
   ChatMessagePayload,
@@ -35,7 +46,13 @@ import type {
   RoomVisibility,
 } from '../shared/protocol.ts';
 import type { WorldMapData } from '../shared/starterMap.ts';
-import { BUILD_PALETTE, type PaletteItem, SPAWN_TILE, type TileLayer } from '../shared/tiles.ts';
+import { SPAWN_TILE } from '../shared/tiles.ts';
+import {
+  DialLockPuzzleModal,
+  EmblemOrderPuzzleModal,
+  FieldJournalModal,
+  NodeInspectionModal,
+} from './AdventureModals.tsx';
 import { VillageCanvas } from './VillageCanvas.tsx';
 
 interface WorldScreenProps {
@@ -43,16 +60,20 @@ interface WorldScreenProps {
   selfUid: string;
   players: RoomPlayerState[];
   chatMessages: ChatMessagePayload[];
+  adventure: AdventureState;
+  adventureBanner: AdventureNotification | null;
+  puzzleFeedback: PuzzleFeedbackState | null;
   connectionState: ConnectionState;
-  canUndo: boolean;
   worldVersion: number;
   toast: { id: number; text: string; tone: 'info' | 'error' } | null;
   reducedMotion: boolean;
   mapRef: React.RefObject<WorldMapData | null>;
   playersRef: React.RefObject<Map<string, LivePlayerEntity>>;
   onSendMove: (seq: number, x: number, y: number, facing: FacingDir, walking: boolean) => void;
-  onRequestEdit: (tileX: number, tileY: number, layer: TileLayer, tileId: number) => void;
-  onRequestUndo: () => void;
+  onInteractNode: (nodeId: string) => void;
+  onSolvePuzzle: (nodeId: string, answer: string | string[]) => void;
+  onDismissAdventureBanner: () => void;
+  onClearPuzzleFeedback: () => void;
   onSendChat: (text: string) => void;
   onReportPlayer: (targetUid: string, reason: string) => void;
   onUpdateSettings: (settings: {
@@ -72,16 +93,20 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   selfUid,
   players,
   chatMessages,
+  adventure,
+  adventureBanner,
+  puzzleFeedback,
   connectionState,
-  canUndo,
   worldVersion,
   toast,
   reducedMotion,
   mapRef,
   playersRef,
   onSendMove,
-  onRequestEdit,
-  onRequestUndo,
+  onInteractNode,
+  onSolvePuzzle,
+  onDismissAdventureBanner,
+  onClearPuzzleFeedback,
   onSendChat,
   onReportPlayer,
   onUpdateSettings,
@@ -90,18 +115,18 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   onCloseRoom,
   onLeave,
 }) => {
-  const [buildMode, setBuildMode] = useState<'build' | 'break'>('build');
-  const [selectedItem, setSelectedItem] = useState<PaletteItem>(BUILD_PALETTE[0]);
-  const [showAllPalette, setShowAllPalette] = useState(false);
   const [zoom, setZoom] = useState(2);
-  const [mutedAudio, setMutedAudio] = useState(false);
+  const [mutedAudio, setMutedAudio] = useState(() => soundFx.getMuted());
   const [coords, setCoords] = useState({ x: SPAWN_TILE.x, y: SPAWN_TILE.y });
   const [showMinimap, setShowMinimap] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 768 : true
   );
+  const [questPanelExpanded, setQuestPanelExpanded] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
 
   const [panelOpen, setPanelOpen] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+    typeof window !== 'undefined' ? window.innerWidth >= 1200 : false
   );
   const [panelTab, setPanelTab] = useState<'chat' | 'roster'>('chat');
   const [chatInput, setChatInput] = useState('');
@@ -110,6 +135,11 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   const [showHelp, setShowHelp] = useState(false);
   const [showHostSettings, setShowHostSettings] = useState(false);
 
+  const [nearbyNode, setNearbyNode] = useState<AdventureNodeDef | null>(null);
+  const [inspectedNode, setInspectedNode] = useState<AdventureNodeDef | null>(null);
+  const [showJournal, setShowJournal] = useState(false);
+  const [journalInitialTab, setJournalInitialTab] = useState<'quests' | 'clues' | 'satchel'>('quests');
+
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -117,22 +147,47 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   const isHost = self?.role === 'host' || room.ownerUid === selfUid;
   const connectedCount = players.filter((p) => p.connected).length;
 
-  const quickSlots = useMemo(() => BUILD_PALETTE.slice(0, 9), []);
+  const progress = getStoryProgressMetrics(adventure);
+  const activeQuest = getActiveQuest(adventure);
 
-  // Pre-render crisp pixel-art palette swatches once
-  const swatches = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const item of BUILD_PALETTE) {
-      out[item.id] = getPaletteSwatchDataUrl(item.layer, item.tileId);
-    }
-    return out;
+  const anyModalOpen = Boolean(inspectedNode || showJournal || showHelp || showHostSettings);
+
+  useEffect(() => {
+    const unsub = soundFx.subscribe(setMutedAudio);
+    const unlockAmbient = () => {
+      soundFx.startAmbient();
+    };
+    soundFx.startAmbient();
+    window.addEventListener('pointerdown', unlockAmbient, { once: true });
+    window.addEventListener('keydown', unlockAmbient, { once: true });
+    return () => {
+      unsub();
+      window.removeEventListener('pointerdown', unlockAmbient);
+      window.removeEventListener('keydown', unlockAmbient);
+      soundFx.stopAmbient();
+    };
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth' });
   }, [chatMessages.length, panelOpen, panelTab, reducedMotion]);
 
-  // Global keyboard shortcuts for hotbar, build/break, undo, and chat focus
+  const handleInspectNode = useCallback(
+    (node: AdventureNodeDef) => {
+      onClearPuzzleFeedback();
+      onInteractNode(node.id);
+      setInspectedNode(node);
+    },
+    [onInteractNode, onClearPuzzleFeedback]
+  );
+
+  const openJournalTo = useCallback((tab: 'quests' | 'clues' | 'satchel' = 'quests') => {
+    setInspectedNode(null);
+    setJournalInitialTab(tab);
+    setShowJournal(true);
+  }, []);
+
+  // Global keyboard shortcuts: J (Journal), M (Minimap), Enter (Chat), ? (Help), Esc (Close modals)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -143,31 +198,39 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         return;
       }
 
-      if (e.key >= '1' && e.key <= '9') {
-        const idx = Number(e.key) - 1;
-        if (quickSlots[idx]) {
-          setSelectedItem(quickSlots[idx]);
-          setBuildMode('build');
+      if (e.key === 'Escape') {
+        if (inspectedNode) {
+          setInspectedNode(null);
+        } else if (showJournal) {
+          setShowJournal(false);
+        } else if (showHelp) {
+          setShowHelp(false);
+        } else if (showHostSettings) {
+          setShowHostSettings(false);
         }
-      } else if (e.key.toLowerCase() === 'b') {
-        setBuildMode((m) => (m === 'build' ? 'break' : 'build'));
-      } else if (e.key.toLowerCase() === 'z' && !e.metaKey && !e.ctrlKey) {
-        onRequestUndo();
-      } else if (e.key.toLowerCase() === 'm') {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+      if (key === 'j') {
+        e.preventDefault();
+        setInspectedNode(null);
+        setShowJournal((v) => !v);
+      } else if (key === 'm' && !anyModalOpen) {
         setShowMinimap((v) => !v);
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !anyModalOpen) {
         e.preventDefault();
         setPanelOpen(true);
         setPanelTab('chat');
         setTimeout(() => chatInputRef.current?.focus(), 30);
-      } else if (e.key === '?') {
+      } else if (e.key === '?' && !inspectedNode) {
         setShowHelp((v) => !v);
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [quickSlots, onRequestUndo]);
+  }, [anyModalOpen, inspectedNode, showJournal, showHelp, showHostSettings]);
 
   const handleCopyInvite = async () => {
     const inviteUrl = `${window.location.origin}/?join=${encodeURIComponent(room.shortCode)}`;
@@ -181,9 +244,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
   };
 
   const handleToggleAudio = () => {
-    const next = !mutedAudio;
-    setMutedAudio(next);
-    soundFx.muted = next;
+    soundFx.toggleMuted();
   };
 
   const handleChatSubmit = (e: React.FormEvent) => {
@@ -209,35 +270,109 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#141C19] text-[#F4F3EE]">
-      {/* Full-bleed interactive village canvas */}
+      {/* Full-bleed interactive village adventure canvas */}
       <VillageCanvas
         mapRef={mapRef}
         playersRef={playersRef}
         selfUid={selfUid}
-        buildMode={buildMode}
-        selectedItem={selectedItem}
-        buildPolicy={room.buildPolicy}
+        adventure={adventure}
         zoom={zoom}
         reducedMotion={reducedMotion}
         showMinimap={showMinimap}
         worldVersion={worldVersion}
+        interactionDisabled={anyModalOpen}
         onSendMove={onSendMove}
-        onRequestEdit={onRequestEdit}
+        onInspectNode={handleInspectNode}
+        onNearbyNodeChange={setNearbyNode}
         onCoordsChange={(x, y) => setCoords({ x, y })}
       />
 
-      {/* Compact Top HUD Bar */}
-      <header className="pointer-events-none fixed inset-x-0 top-0 z-30 flex items-center justify-between gap-3 px-3 py-2.5 sm:px-4">
-        <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-white/12 bg-[#16201C]/90 px-3.5 py-2 backdrop-blur-sm max-w-[65vw]">
-          <span className="font-display text-sm font-semibold text-white truncate">{room.name}</span>
-          <span className="hidden sm:inline text-white/30" aria-hidden="true">
+      {/* BOTTOM-LEFT COMPACT QUEST & STORY PROGRESS PANEL */}
+      <section
+        aria-label="Quest and story progress"
+        className="fixed left-3 bottom-3 z-30 w-[calc(100vw-24px)] max-w-[304px] rounded-xl border border-[#D8C58E]/30 bg-[#16201C]/92 text-[#F4F3EE] shadow-xl backdrop-blur-md sm:left-4 sm:bottom-4"
+      >
+        <button
+          type="button"
+          onClick={() => setQuestPanelExpanded((v) => !v)}
+          className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+          aria-expanded={questPanelExpanded}
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-[11px] font-semibold tracking-wide text-[#EBD28E]">
+                {adventure.chapterTitle}
+              </span>
+              <span className="font-mono text-[11px] font-semibold text-[#D6E3DC] tabular-nums shrink-0">
+                {progress.completedCount}/{progress.totalCount} · {progress.percent}%
+              </span>
+            </div>
+            {/* Progress Bar */}
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-white/12">
+              <div
+                className="h-full rounded-full bg-[#52B788] transition-all duration-300"
+                style={{ width: `${progress.percent}%` }}
+              />
+            </div>
+          </div>
+          <span className="text-[#A8B8AF] shrink-0">
+            {questPanelExpanded ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </span>
+        </button>
+
+        {questPanelExpanded && (
+          <div className="border-t border-white/10 px-3.5 py-2.5 space-y-2">
+            {progress.isComplete ? (
+              <p className="text-xs leading-relaxed text-[#CDE8D6]">
+                All 8 quests complete! Pixelfield&apos;s Free Charter and Golden Astrolabe have been recovered.
+              </p>
+            ) : activeQuest ? (
+              <div>
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-white">
+                  <Compass className="h-3.5 w-3.5 text-[#F4C95D] shrink-0" />
+                  <span className="truncate">{activeQuest.title}</span>
+                </div>
+                <p className="mt-1 text-xs leading-snug text-[#C7D4CC]">
+                  {activeQuest.shortObjective}
+                </p>
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2 pt-0.5 text-[11px]">
+              <span className="text-[#96A89D] truncate">
+                {activeQuest ? activeQuest.targetAreaLabel : 'Free Exploration'}
+              </span>
+              <button
+                type="button"
+                onClick={() => openJournalTo('quests')}
+                className="flex items-center gap-1 font-semibold text-[#7AD9A8] hover:text-white whitespace-nowrap shrink-0"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                <span>Journal &amp; Hints (J)</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* TOP-RIGHT COMPACT UTILITY BAR */}
+      <header className="pointer-events-none fixed right-3 top-3 z-30 flex items-center gap-2 sm:right-4">
+        <div className="pointer-events-auto hidden xl:flex items-center gap-2.5 rounded-lg border border-white/12 bg-[#16201C]/90 px-3 py-2 backdrop-blur-sm">
+          <span className="font-display text-xs font-semibold text-white max-w-[150px] truncate">
+            {room.name}
+          </span>
+          <span className="text-white/25" aria-hidden="true">
             ·
           </span>
           <button
             type="button"
             onClick={handleCopyInvite}
             title="Copy shareable invite link"
-            className="hidden sm:flex items-center gap-1.5 font-mono text-xs text-[#C7D4CC] hover:text-white whitespace-nowrap shrink-0"
+            className="flex items-center gap-1 font-mono text-xs text-[#C7D4CC] hover:text-white whitespace-nowrap"
           >
             <span>{room.shortCode}</span>
             {copiedInvite ? (
@@ -246,37 +381,63 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
               <Copy className="h-3.5 w-3.5 opacity-75" />
             )}
           </button>
-          <span className="hidden md:inline text-white/30" aria-hidden="true">
+          <span className="text-white/25" aria-hidden="true">
             ·
           </span>
-          <div className="hidden md:flex items-center gap-1.5 text-xs text-[#B6C4BC] tabular-nums whitespace-nowrap shrink-0">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                connectionState === 'connected' ? 'bg-[#52B788]' : 'bg-[#E9B949]'
-              }`}
-            />
-            <span>
-              {connectionState === 'connected'
-                ? `${connectedCount}/${room.capacity} online`
-                : 'Reconnecting…'}
-            </span>
-          </div>
-          <span className="hidden lg:inline text-white/30" aria-hidden="true">
-            ·
-          </span>
-          <span className="hidden lg:inline font-mono text-xs text-[#91A398] tabular-nums whitespace-nowrap shrink-0">
+          <span className="font-mono text-xs text-[#91A398] tabular-nums whitespace-nowrap">
             {coords.x}, {coords.y}
           </span>
         </div>
 
-        {/* Right HUD utility controls */}
-        <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-white/12 bg-[#16201C]/90 p-1.5 backdrop-blur-sm">
+        <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-white/12 bg-[#16201C]/90 p-1.5 backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handleCopyInvite}
+            title={`Copy invite link (${room.shortCode})`}
+            aria-label="Copy invite link"
+            className="flex xl:hidden h-8 items-center gap-1 rounded-md px-2 font-mono text-xs text-[#C7D4CC] hover:bg-white/10 hover:text-white whitespace-nowrap"
+          >
+            <span className="hidden sm:inline">{room.shortCode}</span>
+            {copiedInvite ? (
+              <Check className="h-3.5 w-3.5 text-[#52B788]" />
+            ) : (
+              <Copy className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => openJournalTo('quests')}
+            title="Open Field Journal (J)"
+            aria-label="Open Field Journal"
+            className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors whitespace-nowrap ${
+              showJournal
+                ? 'bg-[#2D6A4F] text-white'
+                : 'text-[#EBD28E] hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <BookOpen className="h-4 w-4" />
+            <span className="hidden sm:inline">Journal</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowMinimap((v) => !v)}
+            title="Toggle village minimap (M)"
+            aria-label="Toggle village minimap"
+            className={`hidden md:flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap ${
+              showMinimap
+                ? 'bg-[#2D6A4F] text-white'
+                : 'text-[#C7D4CC] hover:bg-white/10 hover:text-white'
+            }`}
+          >
+            <MapIcon className="h-4 w-4" />
+            <span className="hidden lg:inline">Map</span>
+          </button>
           <button
             type="button"
             onClick={() => setZoom((z) => Math.max(1, z - 0.5))}
             title="Zoom out"
             aria-label="Zoom out"
-            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
+            className="hidden lg:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
           >
             <ZoomOut className="h-4 w-4" />
           </button>
@@ -285,23 +446,9 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
             onClick={() => setZoom((z) => Math.min(3, z + 0.5))}
             title="Zoom in"
             aria-label="Zoom in"
-            className="hidden sm:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
+            className="hidden lg:flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
           >
             <ZoomIn className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowMinimap((v) => !v)}
-            title="Toggle village minimap (M)"
-            aria-label="Toggle village minimap"
-            className={`flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap ${
-              showMinimap
-                ? 'bg-[#2D6A4F] text-white'
-                : 'text-[#C7D4CC] hover:bg-white/10 hover:text-white'
-            }`}
-          >
-            <MapIcon className="h-4 w-4" />
-            <span className="hidden md:inline">Map</span>
           </button>
           <button
             type="button"
@@ -321,9 +468,9 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                 setPanelOpen(true);
               }
             }}
-            title="Toggle room chat"
+            title="Toggle room chat (Enter)"
             aria-label="Toggle room chat"
-            className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors whitespace-nowrap ${
+            className={`flex h-8 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors whitespace-nowrap ${
               panelOpen && panelTab === 'chat'
                 ? 'bg-[#2D6A4F] text-white'
                 : 'text-[#C7D4CC] hover:bg-white/10 hover:text-white'
@@ -341,9 +488,9 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                 setPanelOpen(true);
               }
             }}
-            title="Toggle villager roster"
-            aria-label="Toggle villager roster"
-            className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium tabular-nums transition-colors whitespace-nowrap ${
+            title="Toggle explorers roster"
+            aria-label="Toggle explorers roster"
+            className={`flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium tabular-nums transition-colors whitespace-nowrap ${
               panelOpen && panelTab === 'roster'
                 ? 'bg-[#2D6A4F] text-white'
                 : 'text-[#C7D4CC] hover:bg-white/10 hover:text-white'
@@ -366,8 +513,8 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
           <button
             type="button"
             onClick={() => setShowHelp(true)}
-            title="Controls & Help"
-            aria-label="Controls and help"
+            title="Controls & Adventure Guide (?)"
+            aria-label="Controls and adventure guide"
             className="flex h-8 w-8 items-center justify-center rounded-md text-[#C7D4CC] hover:bg-white/10 hover:text-white"
           >
             <HelpCircle className="h-4 w-4" />
@@ -375,9 +522,9 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
           <button
             type="button"
             onClick={onLeave}
-            title="Leave village"
-            aria-label="Leave village"
-            className="flex h-8 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-[#E8B4AE] hover:bg-[#9B2C2C]/30 hover:text-white whitespace-nowrap"
+            title="Leave expedition"
+            aria-label="Leave expedition"
+            className="flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-[#E8B4AE] hover:bg-[#9B2C2C]/30 hover:text-white whitespace-nowrap"
           >
             <LogOut className="h-4 w-4" />
             <span className="hidden md:inline">Leave</span>
@@ -385,8 +532,32 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         </div>
       </header>
 
-      {/* Live server feedback toast (e.g. out of range / protected well / rate limit) */}
-      {toast && (
+      {/* REAL-TIME GROUP DISCOVERY NOTIFICATION BANNER */}
+      {adventureBanner && (
+        <div
+          role="status"
+          className="fixed left-1/2 top-16 z-40 flex w-[calc(100vw-24px)] max-w-md -translate-x-1/2 items-start gap-3 rounded-xl border border-[#EBD28E]/50 bg-[#1A2822]/96 px-4 py-3 text-left shadow-2xl backdrop-blur-md md:top-4"
+        >
+          <Sparkles className="mt-0.5 h-4 w-4 text-[#F4C95D] shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-bold text-[#FCE8B2]">
+              {adventureBanner.actorName} · {adventureBanner.title}
+            </div>
+            <p className="mt-0.5 text-xs leading-snug text-[#DCE7E0]">{adventureBanner.detail}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onDismissAdventureBanner}
+            aria-label="Dismiss notification"
+            className="rounded p-0.5 text-[#9BB0A4] hover:bg-white/10 hover:text-white shrink-0"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Server feedback toast */}
+      {toast && !adventureBanner && (
         <div
           role="status"
           className={`fixed left-1/2 top-16 z-40 -translate-x-1/2 rounded-lg border px-4 py-2 text-xs font-medium shadow-lg ${
@@ -399,16 +570,34 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         </div>
       )}
 
-      {/* Reconnecting banner when socket is temporarily offline */}
+      {/* Reconnecting banner */}
       {connectionState === 'reconnecting' && (
-        <div className="fixed left-1/2 top-16 z-40 -translate-x-1/2 rounded-lg border border-[#C87D28]/60 bg-[#2A2013]/95 px-4 py-2 text-xs font-medium text-[#FCE5B8]">
-          Connection interrupted — restoring your villager seat…
+        <div className="fixed left-1/2 top-28 z-40 -translate-x-1/2 rounded-lg border border-[#C87D28]/60 bg-[#2A2013]/95 px-4 py-2 text-xs font-medium text-[#FCE5B8]">
+          Connection interrupted — restoring your explorer seat…
+        </div>
+      )}
+
+      {/* BOTTOM-CENTER PROXIMITY INTERACTION PROMPT */}
+      {nearbyNode && !anyModalOpen && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-30 hidden justify-center px-4 md:flex">
+          <button
+            type="button"
+            onClick={() => handleInspectNode(nearbyNode)}
+            className="pointer-events-auto flex items-center gap-3 rounded-xl border border-[#EBD28E]/55 bg-[#16201C]/95 px-4 py-2.5 text-sm text-white shadow-xl backdrop-blur-md transition-transform hover:scale-[1.02] hover:border-[#F7D774]"
+          >
+            <Search className="h-4 w-4 text-[#F4C95D] shrink-0" />
+            <span className="font-semibold">{nearbyNode.name}</span>
+            <span className="text-white/30" aria-hidden="true">
+              ·
+            </span>
+            <span className="font-mono text-xs text-[#EBD28E]">Press E or Click to inspect</span>
+          </button>
         </div>
       )}
 
       {/* Right Collapsible Chat & Roster Drawer */}
       {panelOpen && (
-        <aside className="fixed right-3 top-16 bottom-24 z-30 flex w-[calc(100vw-24px)] max-w-80 flex-col overflow-hidden rounded-xl border border-white/12 bg-[#16201C]/92 shadow-xl backdrop-blur-md">
+        <aside className="fixed right-3 top-16 bottom-6 z-30 flex w-[calc(100vw-24px)] max-w-80 flex-col overflow-hidden rounded-xl border border-white/12 bg-[#16201C]/92 shadow-xl backdrop-blur-md sm:right-4">
           <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
             <div className="flex items-center gap-1 rounded-md bg-black/25 p-0.5">
               <button
@@ -427,7 +616,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                   panelTab === 'roster' ? 'bg-[#2D6A4F] text-white' : 'text-[#A8B8AF] hover:text-white'
                 }`}
               >
-                Villagers ({connectedCount}/{room.capacity})
+                Explorers ({connectedCount}/{room.capacity})
               </button>
             </div>
             <button
@@ -445,13 +634,13 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
               <div className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-xs">
                 {visibleMessages.length === 0 ? (
                   <p className="text-[#8FA096]">
-                    Say hello to your neighbors. Chat stays inside this room and is not stored permanently.
+                    Share clues and coordinate with your group here. Discoveries appear automatically.
                   </p>
                 ) : (
                   visibleMessages.map((m) => (
                     <div key={m.id} className="leading-relaxed break-words">
                       {m.kind === 'system' ? (
-                        <span className="text-[#8FA096] italic">{m.text}</span>
+                        <span className="text-[#9FD8B7] italic">{m.text}</span>
                       ) : (
                         <>
                           <span className="font-mono text-[10px] text-[#7D8F84] mr-1.5 tabular-nums">
@@ -478,7 +667,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     maxLength={240}
-                    placeholder="Message village… (Enter)"
+                    placeholder="Share a clue… (Enter)"
                     className="flex-1 rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-xs text-white placeholder:text-[#84958B] focus:border-[#52B788] focus:outline-none"
                   />
                   <button
@@ -510,7 +699,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                           {p.role === 'host' && <Crown className="h-3 w-3 text-[#E9B949] shrink-0" />}
                         </div>
                         <div className="text-[11px] text-[#8FA096]">
-                          {p.connected ? 'In village' : 'Reconnecting…'}
+                          {p.connected ? 'Exploring village' : 'Reconnecting…'}
                         </div>
                       </div>
                     </div>
@@ -531,7 +720,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onReportPlayer(p.uid, 'Reported from village roster')}
+                          onClick={() => onReportPlayer(p.uid, 'Reported from roster')}
                           title="Report player"
                           aria-label={`Report ${p.displayName}`}
                           className="rounded p-1 text-[#A8B8AF] hover:bg-white/10 hover:text-[#FCE5B8]"
@@ -552,7 +741,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                             <button
                               type="button"
                               onClick={() => onKickPlayer(p.uid, false)}
-                              title="Remove from village"
+                              title="Remove from room"
                               aria-label={`Kick ${p.displayName}`}
                               className="rounded p-1 text-[#E8B4AE] hover:bg-[#9B2C2C]/40 hover:text-white"
                             >
@@ -570,133 +759,62 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         </aside>
       )}
 
-      {/* Bottom Compact Hotbar & Expandable Full Tile Tray */}
-      <div className="pointer-events-none fixed inset-x-0 bottom-3 z-30 flex flex-col items-center gap-2 px-3">
-        {showAllPalette && (
-          <div className="pointer-events-auto grid max-h-60 max-w-xl grid-cols-5 gap-1.5 overflow-y-auto rounded-xl border border-white/14 bg-[#16201C]/95 p-3 shadow-xl backdrop-blur-md sm:grid-cols-5">
-            {BUILD_PALETTE.map((item) => {
-              const active = buildMode === 'build' && selectedItem.id === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedItem(item);
-                    setBuildMode('build');
-                    setShowAllPalette(false);
-                  }}
-                  className={`flex flex-col items-center gap-1 rounded-lg border p-2 text-[11px] transition-colors ${
-                    active
-                      ? 'border-[#52B788] bg-[#2D6A4F]/40 text-white'
-                      : 'border-white/8 bg-black/20 text-[#C7D4CC] hover:bg-white/10'
-                  }`}
-                >
-                  <img
-                    src={swatches[item.id]}
-                    alt={item.label}
-                    className="h-8 w-8 rounded-xs pixelated"
-                  />
-                  <span className="truncate w-full text-center">{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
+      {/* ADVENTURE INSPECTION & PUZZLE MODALS */}
+      {inspectedNode && inspectedNode.puzzleType === 'dial_lock' && (
+        <DialLockPuzzleModal
+          node={inspectedNode}
+          adventure={adventure}
+          puzzleFeedback={puzzleFeedback}
+          onSubmitCode={(code) => onSolvePuzzle(inspectedNode.id, code)}
+          onOpenJournal={() => openJournalTo('clues')}
+          onClose={() => setInspectedNode(null)}
+        />
+      )}
+
+      {inspectedNode && inspectedNode.puzzleType === 'emblem_order' && (
+        <EmblemOrderPuzzleModal
+          node={inspectedNode}
+          adventure={adventure}
+          puzzleFeedback={puzzleFeedback}
+          onSubmitOrder={(order) => onSolvePuzzle(inspectedNode.id, order)}
+          onOpenJournal={() => openJournalTo('clues')}
+          onClose={() => setInspectedNode(null)}
+        />
+      )}
+
+      {inspectedNode &&
+        inspectedNode.puzzleType !== 'dial_lock' &&
+        inspectedNode.puzzleType !== 'emblem_order' && (
+          <NodeInspectionModal
+            node={inspectedNode}
+            adventure={adventure}
+            onUnlockVaultChest={() => onSolvePuzzle('founders_vault_chest', 'open_vault')}
+            onOpenJournal={() => openJournalTo('clues')}
+            onClose={() => setInspectedNode(null)}
+          />
         )}
 
-        <div className="pointer-events-auto flex max-w-full items-center gap-1.5 overflow-x-auto rounded-xl border border-white/14 bg-[#16201C]/92 p-1.5 shadow-xl backdrop-blur-md">
-          {/* Build / Break mode toggle */}
-          <div className="flex items-center gap-1 rounded-lg bg-black/30 p-0.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setBuildMode('build')}
-              title="Build mode (B)"
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
-                buildMode === 'build' ? 'bg-[#2D6A4F] text-white' : 'text-[#A8B8AF] hover:text-white'
-              }`}
-            >
-              <Hammer className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Build</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setBuildMode('break')}
-              title="Clear tile mode (B or Right-click)"
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap ${
-                buildMode === 'break' ? 'bg-[#C87D28] text-white' : 'text-[#A8B8AF] hover:text-white'
-              }`}
-            >
-              <Eraser className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Clear</span>
-            </button>
-          </div>
-
-          <div className="h-7 w-px bg-white/12 shrink-0" />
-
-          {/* 9 Hotbar Tile Swatches */}
-          <div className="flex items-center gap-1 shrink-0">
-            {quickSlots.map((item, idx) => {
-              const active = buildMode === 'build' && selectedItem.id === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedItem(item);
-                    setBuildMode('build');
-                  }}
-                  title={`${item.label} (${idx + 1})`}
-                  className={`relative flex h-11 w-11 items-center justify-center rounded-lg border transition-transform ${
-                    active
-                      ? 'border-[#52B788] bg-[#2D6A4F]/50 -translate-y-0.5'
-                      : 'border-white/10 bg-black/25 hover:bg-white/10'
-                  }`}
-                >
-                  <img
-                    src={swatches[item.id]}
-                    alt={item.label}
-                    className="h-7 w-7 rounded-xs pixelated"
-                  />
-                  <span className="absolute right-1 top-0.5 font-mono text-[9px] text-white/70">
-                    {idx + 1}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowAllPalette((v) => !v)}
-            title="Show all buildable tiles"
-            aria-label="Toggle full tile palette"
-            className="flex h-11 items-center gap-1 rounded-lg border border-white/10 bg-black/25 px-2.5 text-xs font-medium text-[#C7D4CC] hover:bg-white/10 hover:text-white shrink-0 whitespace-nowrap"
-          >
-            <span>All</span>
-            {showAllPalette ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
-          </button>
-
-          <div className="h-7 w-px bg-white/12 shrink-0" />
-
-          {/* Undo own last placement */}
-          <button
-            type="button"
-            onClick={onRequestUndo}
-            disabled={!canUndo}
-            title="Undo your last placement (Z)"
-            className="flex h-11 items-center gap-1.5 rounded-lg border border-white/10 bg-black/25 px-3 text-xs font-medium text-[#E8F3EC] hover:bg-white/10 disabled:opacity-40 shrink-0 whitespace-nowrap"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Undo</span>
-          </button>
-        </div>
-      </div>
+      {/* FIELD JOURNAL MODAL */}
+      {showJournal && (
+        <FieldJournalModal
+          adventure={adventure}
+          initialTab={journalInitialTab}
+          onClose={() => setShowJournal(false)}
+        />
+      )}
 
       {/* Host Live Settings Modal */}
       {showHostSettings && isHost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#1B2622] p-6 text-[#F4F3EE] shadow-2xl space-y-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setShowHostSettings(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl border border-white/15 bg-[#1B2622] p-6 text-[#F4F3EE] shadow-2xl space-y-4"
+          >
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h2 className="font-display text-xl font-semibold">Host Village Settings</h2>
+              <h2 className="font-display text-xl font-semibold">Expedition Room Settings</h2>
               <button
                 type="button"
                 onClick={() => setShowHostSettings(false)}
@@ -721,21 +839,8 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs text-[#A8B8AF]">Building Policy</label>
-                <select
-                  value={room.buildPolicy}
-                  onChange={(e) => onUpdateSettings({ buildPolicy: e.target.value as BuildPolicy })}
-                  className="mt-1 w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm text-white"
-                >
-                  <option value="everyone">Everyone can build</option>
-                  <option value="build_zones">Marked build zones only</option>
-                  <option value="host_only">Host only</option>
-                </select>
-              </div>
-
-              <div>
                 <label className="flex items-center justify-between text-xs text-[#A8B8AF]">
-                  <span>Maximum capacity (10–15)</span>
+                  <span>Maximum explorers (10–15)</span>
                   <span className="font-mono font-semibold text-white tabular-nums">{room.capacity}</span>
                 </label>
                 <input
@@ -764,7 +869,7 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
                   onClick={onCloseRoom}
                   className="rounded-lg bg-[#9B2C2C] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#7D2222]"
                 >
-                  Close Village Room
+                  Close Room
                 </button>
                 <button
                   type="button"
@@ -779,12 +884,18 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
         </div>
       )}
 
-      {/* Controls & Help Overlay */}
+      {/* Controls & Adventure Guide Modal */}
       {showHelp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#1B2622] p-6 text-[#F4F3EE] shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setShowHelp(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl border border-white/15 bg-[#1B2622] p-6 text-[#F4F3EE] shadow-2xl"
+          >
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h2 className="font-display text-xl font-semibold">Controls & Village Guide</h2>
+              <h2 className="font-display text-xl font-semibold">Controls &amp; Treasure Hunt Guide</h2>
               <button
                 type="button"
                 onClick={() => setShowHelp(false)}
@@ -795,36 +906,32 @@ export const WorldScreen: React.FC<WorldScreenProps> = ({
             </div>
             <dl className="mt-4 space-y-2.5 text-xs">
               <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Walk around</dt>
+                <dt className="text-[#A8B8AF]">Walk around village</dt>
                 <dd className="font-mono text-white">WASD / Arrow keys / Touch D-pad</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Place selected tile</dt>
-                <dd className="font-mono text-white">Left-click or Space</dd>
+                <dt className="text-[#A8B8AF]">Inspect clue, chest, or villager</dt>
+                <dd className="font-mono text-white">Key E / Space / Click object</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Clear object or ground</dt>
-                <dd className="font-mono text-white">Right-click or Clear mode (B)</dd>
+                <dt className="text-[#A8B8AF]">Field Journal, Clues &amp; Hints</dt>
+                <dd className="font-mono text-white">Key J</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Select hotbar tile</dt>
-                <dd className="font-mono text-white">Keys 1 – 9</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Undo your last edit</dt>
-                <dd className="font-mono text-white">Key Z</dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt className="text-[#A8B8AF]">Toggle minimap</dt>
+                <dt className="text-[#A8B8AF]">Toggle village minimap</dt>
                 <dd className="font-mono text-white">Key M</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-[#A8B8AF]">Open room chat</dt>
                 <dd className="font-mono text-white">Enter</dd>
               </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-[#A8B8AF]">Close dialogs</dt>
+                <dd className="font-mono text-white">Esc</dd>
+              </div>
             </dl>
             <p className="mt-4 border-t border-white/10 pt-3 text-xs leading-relaxed text-[#9BB0A4]">
-              All builds autosave every few seconds. The central village well and spawn pad are protected landmarks.
+              Every clue, key, map fragment, and solved puzzle is shared across your whole group and saved automatically. Start by inspecting the Central Stone Well in Pixelfield Plaza!
             </p>
           </div>
         </div>

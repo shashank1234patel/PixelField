@@ -197,6 +197,51 @@ function makeWaterFrame(frame: number): HTMLCanvasElement {
   return c;
 }
 
+function makeFootprints(): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  px(ctx, 0, 0, 24, 24, '#6FA34B');
+  px(ctx, 2, 3, 5, 4, '#669943');
+  px(ctx, 14, 15, 6, 4, '#79AE54');
+  // Pair of muddy bootprints angled southeast
+  px(ctx, 5, 6, 4, 5, '#5C3D25');
+  px(ctx, 6, 11, 3, 2, '#4A2F1B');
+  px(ctx, 13, 12, 4, 5, '#5C3D25');
+  px(ctx, 14, 17, 3, 2, '#4A2F1B');
+  px(ctx, 6, 7, 1, 2, '#7A5437');
+  px(ctx, 14, 13, 1, 2, '#7A5437');
+  return c;
+}
+
+function makeRuinFloor(): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  px(ctx, 0, 0, 24, 24, '#5E6660');
+  px(ctx, 1, 1, 10, 10, '#858E87');
+  px(ctx, 1, 1, 10, 1, '#A2ABA4');
+  px(ctx, 12, 1, 11, 10, '#7B847D');
+  px(ctx, 1, 12, 11, 11, '#7D867F');
+  px(ctx, 13, 12, 10, 11, '#89928B');
+  // Mossy cracks
+  px(ctx, 10, 4, 3, 3, '#4E7D44');
+  px(ctx, 4, 11, 4, 2, '#4E7D44');
+  px(ctx, 16, 18, 3, 2, '#5F9150');
+  return c;
+}
+
+function makePressurePlate(): HTMLCanvasElement {
+  const [c, ctx] = createTileCanvas();
+  px(ctx, 0, 0, 24, 24, '#6E7771');
+  px(ctx, 2, 2, 20, 20, '#3C4440');
+  px(ctx, 4, 4, 16, 16, '#9AA39C');
+  px(ctx, 4, 4, 16, 2, '#BCC4BE');
+  px(ctx, 4, 18, 16, 2, '#69726C');
+  // Recessed golden brass surveyor rune ring
+  px(ctx, 7, 7, 10, 10, '#C49A3D');
+  px(ctx, 9, 9, 6, 6, '#8A938C');
+  px(ctx, 11, 10, 2, 4, '#F4D06F');
+  px(ctx, 10, 11, 4, 2, '#F4D06F');
+  return c;
+}
+
 function makeObjectSprite(tile: ObjectTile): HTMLCanvasElement {
   const [c, ctx] = createTileCanvas();
   switch (tile) {
@@ -504,6 +549,142 @@ function makeObjectSprite(tile: ObjectTile): HTMLCanvasElement {
       px(ctx, 14, 11, 2, 2, '#F4C430');
       break;
     }
+    case ObjectTile.CHEST_LOCKED: {
+      px(ctx, 3, 19, 18, 3, 'rgba(18, 25, 20, 0.32)');
+      // Rich oak & ironbound treasure chest
+      px(ctx, 3, 7, 18, 13, '#4B2E19');
+      px(ctx, 4, 8, 16, 11, '#8F5830');
+      px(ctx, 4, 8, 16, 4, '#A86B3D');
+      // Iron straps
+      px(ctx, 6, 7, 2, 13, '#3D464D');
+      px(ctx, 16, 7, 2, 13, '#3D464D');
+      px(ctx, 3, 12, 18, 2, '#2F373D');
+      // Golden padlock front clasp
+      px(ctx, 10, 11, 4, 5, '#D49A2A');
+      px(ctx, 11, 12, 2, 3, '#FFE07A');
+      px(ctx, 11, 14, 2, 1, '#5C3A16');
+      break;
+    }
+    case ObjectTile.CHEST_OPENED: {
+      px(ctx, 3, 19, 18, 3, 'rgba(18, 25, 20, 0.32)');
+      // Raised chest lid
+      px(ctx, 3, 3, 18, 7, '#4B2E19');
+      px(ctx, 4, 4, 16, 5, '#7A4926');
+      px(ctx, 6, 3, 2, 7, '#3D464D');
+      px(ctx, 16, 3, 2, 7, '#3D464D');
+      // Lower body & gleaming gold/charter contents
+      px(ctx, 3, 10, 18, 10, '#4B2E19');
+      px(ctx, 4, 11, 16, 8, '#8F5830');
+      px(ctx, 5, 9, 14, 4, '#F4C430');
+      px(ctx, 7, 8, 6, 3, '#FFF0A6');
+      px(ctx, 13, 9, 5, 3, '#F6F1DE'); // rolled charter scroll
+      px(ctx, 6, 13, 2, 7, '#3D464D');
+      px(ctx, 16, 13, 2, 7, '#3D464D');
+      break;
+    }
+    case ObjectTile.NOTE_SCROLL: {
+      px(ctx, 5, 18, 14, 3, 'rgba(18, 25, 20, 0.25)');
+      // Rolled parchment & warm red wax seal
+      px(ctx, 5, 8, 14, 11, '#8C7A5B');
+      px(ctx, 6, 9, 12, 9, '#F7F1DC');
+      px(ctx, 7, 11, 9, 1, '#75664C');
+      px(ctx, 7, 13, 7, 1, '#75664C');
+      px(ctx, 7, 15, 5, 1, '#75664C');
+      px(ctx, 14, 14, 4, 4, '#B83B3B');
+      px(ctx, 15, 15, 2, 2, '#E05A5A');
+      break;
+    }
+    case ObjectTile.RELIC_SATCHEL: {
+      px(ctx, 5, 19, 14, 3, 'rgba(18, 25, 20, 0.28)');
+      // Woven expedition satchel with colorful ribbon
+      px(ctx, 6, 9, 12, 11, '#5C3B22');
+      px(ctx, 7, 10, 10, 9, '#C49A6C');
+      px(ctx, 8, 7, 8, 4, '#B08456');
+      // Ribbon tie & flower sprig
+      px(ctx, 7, 10, 10, 2, '#C84B59');
+      px(ctx, 11, 9, 2, 4, '#F4C430');
+      px(ctx, 14, 7, 3, 3, '#52A34C');
+      break;
+    }
+    case ObjectTile.ANCIENT_STATUE: {
+      px(ctx, 3, 19, 18, 4, 'rgba(15, 22, 18, 0.34)');
+      // Stepped carved sandstone emblem altar
+      px(ctx, 3, 15, 18, 6, '#5D6660');
+      px(ctx, 4, 16, 16, 4, '#8A948D');
+      px(ctx, 5, 6, 14, 11, '#6E7871');
+      px(ctx, 6, 7, 12, 9, '#9DA8A0');
+      px(ctx, 6, 7, 12, 2, '#BDC7C0');
+      // Four carved emblem squares on altar face
+      px(ctx, 7, 10, 3, 3, '#3B82B6');
+      px(ctx, 11, 10, 2, 3, '#E8BA51');
+      px(ctx, 14, 10, 3, 3, '#52B788');
+      px(ctx, 10, 3, 4, 4, '#F4D06F');
+      px(ctx, 11, 4, 2, 2, '#FFF5C0');
+      break;
+    }
+    case ObjectTile.RUIN_PILLAR: {
+      px(ctx, 5, 19, 14, 4, 'rgba(15, 22, 18, 0.32)');
+      px(ctx, 6, 4, 12, 16, '#656E68');
+      px(ctx, 7, 5, 10, 14, '#929C95');
+      px(ctx, 7, 5, 3, 14, '#AEB8B1');
+      px(ctx, 5, 3, 14, 3, '#7C867F');
+      px(ctx, 5, 18, 14, 3, '#7C867F');
+      // Ivy vine creeping up pillar
+      px(ctx, 8, 8, 3, 4, '#3D7A42');
+      px(ctx, 11, 11, 4, 3, '#4E9450');
+      px(ctx, 13, 14, 3, 3, '#366E3B');
+      break;
+    }
+    case ObjectTile.CAVERN_WALL: {
+      px(ctx, 0, 0, 24, 24, '#39423E');
+      px(ctx, 1, 1, 12, 10, '#4F5A54');
+      px(ctx, 13, 2, 10, 11, '#47524C');
+      px(ctx, 1, 12, 11, 11, '#434E48');
+      px(ctx, 12, 13, 11, 10, '#535F58');
+      // Moss highlights along cliff top
+      px(ctx, 2, 1, 9, 3, '#4B7D44');
+      px(ctx, 14, 2, 7, 2, '#588F4E');
+      px(ctx, 2, 12, 9, 1, '#68756E');
+      break;
+    }
+    case ObjectTile.HIDDEN_DOOR_CLOSED: {
+      px(ctx, 0, 0, 24, 24, '#39423E');
+      // Ancient sealed stone archway
+      px(ctx, 2, 2, 20, 22, '#5F6963');
+      px(ctx, 4, 4, 16, 20, '#78827C');
+      px(ctx, 4, 4, 16, 2, '#9AA49E');
+      // Glowing golden rune seal across closed seam
+      px(ctx, 11, 4, 2, 20, '#3C4540');
+      px(ctx, 6, 11, 12, 2, '#D49A2A');
+      px(ctx, 10, 9, 4, 6, '#F4C430');
+      px(ctx, 11, 10, 2, 4, '#FFF3B0');
+      break;
+    }
+    case ObjectTile.HIDDEN_DOOR_OPEN: {
+      // Walkable open cavern archway with warm lantern glow inside
+      px(ctx, 0, 0, 24, 5, '#4F5A54');
+      px(ctx, 0, 0, 4, 24, '#5F6963');
+      px(ctx, 20, 0, 4, 24, '#5F6963');
+      px(ctx, 4, 4, 16, 20, '#2B241D');
+      px(ctx, 6, 6, 12, 18, '#3B3025');
+      // Warm lantern floor light spilling through doorway
+      px(ctx, 7, 14, 10, 10, '#735838');
+      px(ctx, 9, 16, 6, 8, '#A67C46');
+      break;
+    }
+    case ObjectTile.BOUNDARY_STONE: {
+      px(ctx, 5, 19, 14, 3, 'rgba(18, 25, 20, 0.3)');
+      px(ctx, 6, 6, 12, 15, '#646D67');
+      px(ctx, 7, 7, 10, 13, '#8F9992');
+      px(ctx, 8, 5, 8, 3, '#A8B2AB');
+      // Chiseled brass compass arrow
+      px(ctx, 11, 9, 2, 8, '#D49A2A');
+      px(ctx, 8, 12, 8, 2, '#D49A2A');
+      px(ctx, 14, 11, 2, 4, '#FFE07A');
+      // Moss cap
+      px(ctx, 7, 6, 5, 2, '#4A8242');
+      break;
+    }
     default:
       break;
   }
@@ -524,6 +705,9 @@ export function getSpriteAtlas(): SpriteAtlas {
   ground.set(GroundTile.SAND_SHORE, [makeSandShore()]);
   ground.set(GroundTile.PLAZA_STONE, [makePlazaStone()]);
   ground.set(GroundTile.BRIDGE, [makeBridge()]);
+  ground.set(GroundTile.FOOTPRINTS, [makeFootprints()]);
+  ground.set(GroundTile.RUIN_FLOOR, [makeRuinFloor()]);
+  ground.set(GroundTile.PRESSURE_PLATE, [makePressurePlate()]);
   const waterFrames = [0, 1, 2, 3].map((f) => makeWaterFrame(f));
   ground.set(GroundTile.WATER, waterFrames);
 

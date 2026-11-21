@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, ne } from 'drizzle-orm';
 import { db } from '../db/index.ts';
 import {
+  adventureProgress,
   chatModerationLogs,
   roomMemberships,
   rooms,
@@ -9,6 +10,12 @@ import {
   worldEdits,
   worlds,
 } from '../db/schema.ts';
+import {
+  type AdventureState,
+  CHAPTER_1_ID,
+  createInitialAdventureState,
+  normalizeAdventureState,
+} from '../shared/adventureData.ts';
 import type {
   BuildPolicy,
   MemberRole,
@@ -169,6 +176,12 @@ export async function createRoomWithWorld(params: {
       reconnectExpiresAt,
       lastX: SPAWN_TILE.x,
       lastY: SPAWN_TILE.y,
+    });
+
+    await db.insert(adventureProgress).values({
+      roomId,
+      chapterId: CHAPTER_1_ID,
+      stateJson: JSON.stringify(createInitialAdventureState()),
     });
 
     return {
@@ -662,5 +675,56 @@ export async function loadUsersByUids(uids: string[]): Promise<Map<string, typeo
   } catch (error) {
     console.error('Failed to fetch user batch:', error);
     return out;
+  }
+}
+
+export async function loadAdventureProgress(roomId: string): Promise<AdventureState> {
+  try {
+    const rows = await db
+      .select()
+      .from(adventureProgress)
+      .where(eq(adventureProgress.roomId, roomId))
+      .limit(1);
+    if (rows.length === 0) {
+      const fresh = createInitialAdventureState();
+      await db
+        .insert(adventureProgress)
+        .values({
+          roomId,
+          chapterId: fresh.chapterId,
+          stateJson: JSON.stringify(fresh),
+        })
+        .onConflictDoNothing();
+      return fresh;
+    }
+    return normalizeAdventureState(JSON.parse(rows[0].stateJson));
+  } catch (error) {
+    console.error('Failed to load adventure progress:', error);
+    return createInitialAdventureState();
+  }
+}
+
+export async function saveAdventureProgress(roomId: string, state: AdventureState): Promise<void> {
+  try {
+    const now = new Date();
+    const json = JSON.stringify(state);
+    await db
+      .insert(adventureProgress)
+      .values({
+        roomId,
+        chapterId: state.chapterId,
+        stateJson: json,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [adventureProgress.roomId],
+        set: {
+          chapterId: state.chapterId,
+          stateJson: json,
+          updatedAt: now,
+        },
+      });
+  } catch (error) {
+    console.error('Failed to save adventure progress:', error);
   }
 }

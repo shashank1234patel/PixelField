@@ -20,6 +20,9 @@ export enum GroundTile {
   GRASS_TUFT = 8,
   BRIDGE = 9,
   ROAD_EDGE = 10,
+  FOOTPRINTS = 11,
+  RUIN_FLOOR = 12,
+  PRESSURE_PLATE = 13,
 }
 
 export enum ObjectTile {
@@ -48,6 +51,16 @@ export enum ObjectTile {
   WINDOW = 22,
   CRATE = 23,
   BUSH = 24,
+  CHEST_LOCKED = 25,
+  CHEST_OPENED = 26,
+  NOTE_SCROLL = 27,
+  RELIC_SATCHEL = 28,
+  ANCIENT_STATUE = 29,
+  RUIN_PILLAR = 30,
+  CAVERN_WALL = 31,
+  HIDDEN_DOOR_CLOSED = 32,
+  HIDDEN_DOOR_OPEN = 33,
+  BOUNDARY_STONE = 34,
 }
 
 export type TileLayer = 'ground' | 'object';
@@ -141,6 +154,13 @@ const SOLID_OBJECTS = new Set<number>([
   ObjectTile.LANTERN_TOWER,
   ObjectTile.SIGNPOST,
   ObjectTile.PIER_POST,
+  ObjectTile.CHEST_LOCKED,
+  ObjectTile.CHEST_OPENED,
+  ObjectTile.ANCIENT_STATUE,
+  ObjectTile.RUIN_PILLAR,
+  ObjectTile.CAVERN_WALL,
+  ObjectTile.HIDDEN_DOOR_CLOSED,
+  ObjectTile.BOUNDARY_STONE,
 ]);
 
 export function isGroundSolid(ground: number): boolean {

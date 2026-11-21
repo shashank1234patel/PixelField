@@ -2,6 +2,18 @@ import type { IncomingMessage } from 'node:http';
 import type { Server as HttpServer } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
+  ADVENTURE_CLUES,
+  ADVENTURE_ITEMS,
+  ADVENTURE_QUESTS,
+  type AdventureNodeDef,
+  type AdventureNotification,
+  type AdventureState,
+  DIAL_CHEST_CODE,
+  EMBLEM_SEQUENCE_SOLUTION,
+  type QuestId,
+  getAdventureNodesForMap,
+} from '../shared/adventureData.ts';
+import {
   type ChatMessagePayload,
   type ClientEvent,
   type FacingDir,
@@ -16,6 +28,7 @@ import { type WorldMapData, packMapToChunks } from '../shared/starterMap.ts';
 import {
   ALLOWED_GROUND_TILES,
   ALLOWED_OBJECT_TILES,
+  ObjectTile,
   getSpawnPoints,
   isInBuildZone,
   isProtectedLandmarkTile,
@@ -30,10 +43,12 @@ import {
   flushDirtyWorldChunks,
   formatRoomSummary,
   getRoomByIdOrCode,
+  loadAdventureProgress,
   loadWorldForRoom,
   recordChatReport,
   recordHostTransfer,
   recordKickOrBan,
+  saveAdventureProgress,
   updateMemberLastPosition,
   updateRoomMetadata,
 } from './worldPersistence.ts';
@@ -75,6 +90,12 @@ interface ActiveRoomSession {
   chunkSize: number;
   saveVersion: number;
   map: WorldMapData;
+  adventure: AdventureState;
+  adventureNodes: AdventureNodeDef[];
+  plateLatchUntil: {
+    plateA: number;
+    plateB: number;
+  };
   players: Map<string, ConnectedPlayer>;
   recentChat: ChatMessagePayload[];
   dirtyChunks: Set<string>;
@@ -248,6 +269,12 @@ export class RealtimeRoomManager {
         case 'world.undoRequest':
           this.handleUndo(session, player);
           break;
+        case 'adventure.interact':
+          await this.handleAdventureInteract(session, player, msg.nodeId);
+          break;
+        case 'adventure.solvePuzzle':
+          await this.handleAdventureSolvePuzzle(session, player, msg.nodeId, msg.answer);
+          break;
         case 'chat.send':
           this.handleChat(session, player, msg.text);
           break;
@@ -325,13 +352,42 @@ export class RealtimeRoomManager {
       throw new Error('This room has been closed by the host.');
     }
 
-    const worldData = await loadWorldForRoom(roomRow.id);
+    const [worldData, adventure] = await Promise.all([
+      loadWorldForRoom(roomRow.id),
+      loadAdventureProgress(roomRow.id),
+    ]);
+    const adventureNodes = getAdventureNodesForMap(worldData.map.width, worldData.map.height);
+
+    // Ensure world tiles match persisted adventure state (opened chests, hidden door, collected satchels)
+    for (const node of adventureNodes) {
+      if (node.x < 0 || node.x >= worldData.map.width || node.y < 0 || node.y >= worldData.map.height) {
+        continue;
+      }
+      const idx = tileIndex(node.x, node.y, worldData.map.width);
+      if (node.kind === 'hidden_door') {
+        worldData.map.objects[idx] = adventure.hiddenDoorOpen
+          ? ObjectTile.HIDDEN_DOOR_OPEN
+          : ObjectTile.HIDDEN_DOOR_CLOSED;
+      } else if (node.kind === 'chest' && adventure.openedChests.includes(node.id)) {
+        worldData.map.objects[idx] = ObjectTile.CHEST_OPENED;
+      } else if (
+        (node.kind === 'satchel' || node.kind === 'curio') &&
+        node.itemId &&
+        adventure.collectedItems.includes(node.itemId)
+      ) {
+        worldData.map.objects[idx] = ObjectTile.NONE;
+      }
+    }
+
     const session: ActiveRoomSession = {
       room: formatRoomSummary(roomRow, 0),
       worldId: worldData.worldId,
       chunkSize: worldData.chunkSize,
       saveVersion: worldData.saveVersion,
       map: worldData.map,
+      adventure,
+      adventureNodes,
+      plateLatchUntil: { plateA: 0, plateB: 0 },
       players: new Map(),
       recentChat: [],
       dirtyChunks: new Set(),
@@ -343,6 +399,7 @@ export class RealtimeRoomManager {
 
     session.tickTimer = setInterval(() => {
       this.broadcastMovementTick(session);
+      this.evaluatePressurePlates(session);
     }, TICK_INTERVAL_MS);
 
     this.sessions.set(roomRow.id, session);
@@ -442,6 +499,7 @@ export class RealtimeRoomManager {
         chunks,
       },
       recentChat: session.recentChat,
+      adventure: session.adventure,
       canUndo: player.undoStack.length > 0,
     });
 
@@ -1026,6 +1084,489 @@ export class RealtimeRoomManager {
         saveVersion: session.saveVersion,
         canUndo: p.uid === player.uid ? player.undoStack.length > 0 : undefined,
       });
+    }
+  }
+
+  private setAdventureMapObjectTile(
+    session: ActiveRoomSession,
+    actorUid: string,
+    tileX: number,
+    tileY: number,
+    newTile: number
+  ) {
+    if (tileX < 0 || tileX >= session.map.width || tileY < 0 || tileY >= session.map.height) return;
+    const idx = tileIndex(tileX, tileY, session.map.width);
+    const oldTile = session.map.objects[idx];
+    if (oldTile === newTile) return;
+
+    session.map.objects[idx] = newTile;
+    session.saveVersion += 1;
+    const chunkX = Math.floor(tileX / session.chunkSize);
+    const chunkY = Math.floor(tileY / session.chunkSize);
+    session.dirtyChunks.add(`${chunkX},${chunkY}`);
+    session.pendingEdits.push({
+      actorUid,
+      tileX,
+      tileY,
+      layer: 'object',
+      oldTile,
+      newTile,
+    });
+    this.scheduleAutosave(session);
+
+    this.broadcast(session, {
+      v: PROTOCOL_VERSION,
+      type: 'world.editAccepted',
+      actorUid,
+      tileX,
+      tileY,
+      layer: 'object',
+      tileId: newTile,
+      saveVersion: session.saveVersion,
+    });
+  }
+
+  private pushAdventureNotification(
+    session: ActiveRoomSession,
+    actorName: string,
+    kind: AdventureNotification['kind'],
+    title: string,
+    detail: string
+  ) {
+    const now = Date.now();
+    const notification: AdventureNotification = {
+      id: generateSecureId(8),
+      actorName,
+      kind,
+      title,
+      detail,
+      timestamp: now,
+    };
+    session.adventure.recentDiscoveries.push({
+      id: notification.id,
+      actorName,
+      text: `${title} — ${detail}`,
+      timestamp: now,
+    });
+    if (session.adventure.recentDiscoveries.length > 20) {
+      session.adventure.recentDiscoveries.shift();
+    }
+    this.broadcast(session, {
+      v: PROTOCOL_VERSION,
+      type: 'adventure.notification',
+      notification,
+    });
+    this.pushSystemNotice(session, `${actorName}: ${title} (${detail})`);
+  }
+
+  private addUnique<T>(arr: T[], value: T): boolean {
+    if (arr.includes(value)) return false;
+    arr.push(value);
+    return true;
+  }
+
+  private completeQuestIfNew(
+    session: ActiveRoomSession,
+    questId: QuestId,
+    actorName: string
+  ): boolean {
+    if (!this.addUnique(session.adventure.completedQuests, questId)) return false;
+    const quest = ADVENTURE_QUESTS.find((q) => q.id === questId);
+    if (quest) {
+      this.pushAdventureNotification(
+        session,
+        actorName,
+        'quest',
+        `Quest Completed: ${quest.title}`,
+        `Reward: ${quest.rewardSummary}`
+      );
+    }
+    return true;
+  }
+
+  private async handleAdventureInteract(
+    session: ActiveRoomSession,
+    player: ConnectedPlayer,
+    nodeId: string
+  ) {
+    if (session.room.status !== 'active') return;
+    const node = session.adventureNodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    const dist = Math.hypot(player.x - node.x, player.y - node.y);
+    if (dist > 4.2) {
+      this.sendError(player.socket, 'OUT_OF_RANGE', `Walk closer to inspect ${node.name}.`);
+      return;
+    }
+
+    const adv = session.adventure;
+    let stateChanged = false;
+
+    if (this.addUnique(adv.inspectedNodes, node.id)) {
+      stateChanged = true;
+    }
+
+    // 1. Quest 1: Central Well
+    if (node.id === 'plaza_well') {
+      const addedClue = this.addUnique(adv.discoveredClues, 'clue_plaza_well');
+      const addedRibbon = this.addUnique(adv.collectedItems, 'brass_ribbon');
+      if (addedClue || addedRibbon) {
+        stateChanged = true;
+        this.completeQuestIfNew(session, 'q1_well_notice', player.displayName);
+      }
+    }
+
+    // 2. Quest 2: Clara's 3 Lost Seed Satchels
+    else if (
+      node.id === 'herb_satchel_1' ||
+      node.id === 'herb_satchel_2' ||
+      node.id === 'herb_satchel_3'
+    ) {
+      if (node.itemId && this.addUnique(adv.collectedItems, node.itemId)) {
+        stateChanged = true;
+        this.setAdventureMapObjectTile(session, player.uid, node.x, node.y, ObjectTile.NONE);
+        const foundCount = ['herb_satchel_1', 'herb_satchel_2', 'herb_satchel_3'].filter((id) =>
+          adv.collectedItems.includes(id)
+        ).length;
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'item',
+          `Found ${ADVENTURE_ITEMS[node.itemId]?.name ?? node.name}`,
+          foundCount < 3
+            ? `${foundCount}/3 seed satchels collected for Clara.`
+            : 'All 3 satchels found! Return to Clara west of the plaza.'
+        );
+      }
+    } else if (node.id === 'npc_clara') {
+      const allSatchels = ['herb_satchel_1', 'herb_satchel_2', 'herb_satchel_3'].every((id) =>
+        adv.collectedItems.includes(id)
+      );
+      if (allSatchels && !adv.completedQuests.includes('q2_clara_satchels')) {
+        this.addUnique(adv.discoveredClues, 'clue_clara_ledger');
+        this.addUnique(adv.collectedItems, 'copper_field_key');
+        this.completeQuestIfNew(session, 'q2_clara_satchels', player.displayName);
+        stateChanged = true;
+      }
+    }
+
+    // 3. Quest 3 Clues (Signpost & Pasture Board)
+    else if (node.id === 'west_signpost' || node.id === 'pasture_clue') {
+      if (node.clueId && this.addUnique(adv.discoveredClues, node.clueId)) {
+        stateChanged = true;
+        const clue = ADVENTURE_CLUES[node.clueId];
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'clue',
+          `Clue Discovered: ${clue?.title ?? node.name}`,
+          'Added to the shared Field Journal.'
+        );
+      }
+    }
+
+    // 4. Quest 4: Boundary Stone & Hollow Oak Stump
+    else if (node.id === 'south_boundary_stone') {
+      if (this.addUnique(adv.discoveredClues, 'clue_boundary_stone')) {
+        stateChanged = true;
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'clue',
+          'Clue Discovered: Surveyor’s Boundary Stone',
+          'Chiseled arrow points southeast to a hollow oak stump.'
+        );
+      }
+    } else if (node.id === 'south_hollow_stump') {
+      const c = this.addUnique(adv.discoveredClues, 'clue_hollow_stump');
+      const m = this.addUnique(adv.collectedItems, 'map_fragment_2');
+      if (c || m) {
+        stateChanged = true;
+        this.completeQuestIfNew(session, 'q4_meadow_footprints', player.displayName);
+      }
+    }
+
+    // 5. Quest 5: Rowan & Lantern Tower
+    else if (node.id === 'npc_rowan') {
+      if (this.addUnique(adv.discoveredClues, 'clue_rowan_story')) {
+        stateChanged = true;
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'story',
+          "Rowan's Story Revealed",
+          'Alden hid the village charter during the Great Flood to save Pixelfield.'
+        );
+      }
+    } else if (node.id === 'pond_lantern_tower') {
+      const c = this.addUnique(adv.discoveredClues, 'clue_lantern_inscription');
+      const m = this.addUnique(adv.collectedItems, 'map_fragment_3');
+      if (c || m) {
+        stateChanged = true;
+        this.completeQuestIfNew(session, 'q5_lantern_riddle', player.displayName);
+      }
+    }
+
+    // 6. Quest 8: Alden's Final Letter & Founder's Treasure Chest
+    else if (node.id === 'alden_final_letter') {
+      if (this.addUnique(adv.discoveredClues, 'clue_alden_final_letter')) {
+        stateChanged = true;
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'story',
+          "Found Alden's Final Letter",
+          'The truth behind Pixelfield’s charter is recorded in your Journal.'
+        );
+      }
+    } else if (node.id === 'founders_vault_chest') {
+      const hasCopperKey = adv.collectedItems.includes('copper_field_key');
+      const hasSilverCrest = adv.collectedItems.includes('silver_vault_crest');
+      if (hasCopperKey && hasSilverCrest && !adv.openedChests.includes('founders_vault_chest')) {
+        this.addUnique(adv.unlockedChests, 'founders_vault_chest');
+        this.addUnique(adv.openedChests, 'founders_vault_chest');
+        this.addUnique(adv.collectedItems, 'founders_charter');
+        this.setAdventureMapObjectTile(session, player.uid, node.x, node.y, ObjectTile.CHEST_OPENED);
+        this.completeQuestIfNew(session, 'q8_founders_vault', player.displayName);
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'story',
+          "Chapter Complete: The Founder's Cache Uncovered!",
+          'Pixelfield’s Free Charter and Alden’s Golden Astrolabe belong to the village once more.'
+        );
+        stateChanged = true;
+      }
+    }
+
+    // 7. Bonus Village Curios
+    else if (node.kind === 'curio' && node.itemId) {
+      if (this.addUnique(adv.collectedItems, node.itemId)) {
+        stateChanged = true;
+        this.setAdventureMapObjectTile(session, player.uid, node.x, node.y, ObjectTile.NONE);
+        this.pushAdventureNotification(
+          session,
+          player.displayName,
+          'item',
+          `Bonus Curio Found: ${ADVENTURE_ITEMS[node.itemId]?.name ?? node.name}`,
+          'Added to the group’s Satchel & Curios log.'
+        );
+      }
+    }
+
+    if (stateChanged) {
+      this.broadcast(session, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.stateUpdated',
+        adventure: session.adventure,
+      });
+      await saveAdventureProgress(session.room.id, session.adventure);
+    }
+  }
+
+  private async handleAdventureSolvePuzzle(
+    session: ActiveRoomSession,
+    player: ConnectedPlayer,
+    nodeId: string,
+    answer: string | string[]
+  ) {
+    if (session.room.status !== 'active') return;
+    const node = session.adventureNodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    const dist = Math.hypot(player.x - node.x, player.y - node.y);
+    if (dist > 4.5) {
+      this.send(player.socket, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.puzzleResult',
+        nodeId,
+        solved: false,
+        message: 'Step closer to the lock to try an answer.',
+      });
+      return;
+    }
+
+    const adv = session.adventure;
+
+    if (node.id === 'west_satchel_chest') {
+      if (adv.openedChests.includes('west_satchel_chest')) {
+        this.send(player.socket, {
+          v: PROTOCOL_VERSION,
+          type: 'adventure.puzzleResult',
+          nodeId,
+          solved: true,
+          message: 'This chest is already open.',
+        });
+        return;
+      }
+      const code = typeof answer === 'string' ? answer.replace(/\D/g, '') : '';
+      if (code !== DIAL_CHEST_CODE) {
+        this.send(player.socket, {
+          v: PROTOCOL_VERSION,
+          type: 'adventure.puzzleResult',
+          nodeId,
+          solved: false,
+          message:
+            'The brass tumblers resist. Check Grandfather’s Ledger: corner lamps in the plaza, white sheep in the pasture, and hay bales in the pasture.',
+        });
+        return;
+      }
+
+      this.addUnique(adv.solvedPuzzles, node.id);
+      this.addUnique(adv.unlockedChests, node.id);
+      this.addUnique(adv.openedChests, node.id);
+      this.addUnique(adv.discoveredClues, 'clue_satchel_journal');
+      this.addUnique(adv.collectedItems, 'map_fragment_1');
+      this.setAdventureMapObjectTile(session, player.uid, node.x, node.y, ObjectTile.CHEST_OPENED);
+      this.completeQuestIfNew(session, 'q3_dial_chest', player.displayName);
+
+      this.send(player.socket, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.puzzleResult',
+        nodeId,
+        solved: true,
+        message: 'Click! The ironbound chest pops open, revealing Map Fragment I and Alden’s field note.',
+      });
+      this.broadcast(session, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.stateUpdated',
+        adventure: adv,
+      });
+      await saveAdventureProgress(session.room.id, adv);
+      return;
+    }
+
+    if (node.id === 'ruins_symbol_altar') {
+      if (adv.solvedPuzzles.includes('ruins_symbol_altar')) {
+        this.send(player.socket, {
+          v: PROTOCOL_VERSION,
+          type: 'adventure.puzzleResult',
+          nodeId,
+          solved: true,
+          message: 'The Four-Emblem Altar is already aligned.',
+        });
+        return;
+      }
+
+      const seq = Array.isArray(answer) ? answer.map(String) : [];
+      const matches =
+        seq.length === EMBLEM_SEQUENCE_SOLUTION.length &&
+        EMBLEM_SEQUENCE_SOLUTION.every((expected, idx) => seq[idx] === expected);
+
+      if (!matches) {
+        this.send(player.socket, {
+          v: PROTOCOL_VERSION,
+          type: 'adventure.puzzleResult',
+          nodeId,
+          solved: false,
+          message:
+            'The stone tiles slide back. Review the Lantern Tower inscription in your Journal for the order of a day’s work.',
+        });
+        return;
+      }
+
+      this.addUnique(adv.solvedPuzzles, node.id);
+      this.addUnique(adv.collectedItems, 'silver_vault_crest');
+      this.addUnique(adv.discoveredClues, 'clue_ruins_plates');
+      this.completeQuestIfNew(session, 'q6_symbol_altar', player.displayName);
+
+      this.send(player.socket, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.puzzleResult',
+        nodeId,
+        solved: true,
+        message:
+          'A deep rumble echoes! A drawer glides out holding the Silver Vault Crest, and the twin pressure stones to the east begin to glow.',
+      });
+      this.broadcast(session, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.stateUpdated',
+        adventure: adv,
+      });
+      await saveAdventureProgress(session.room.id, adv);
+    }
+  }
+
+  private evaluatePressurePlates(session: ActiveRoomSession) {
+    if (session.room.status !== 'active' || session.adventure.hiddenDoorOpen) return;
+
+    const plateA = session.adventureNodes.find((n) => n.id === 'coop_plate_a');
+    const plateB = session.adventureNodes.find((n) => n.id === 'coop_plate_b');
+    const doorNode = session.adventureNodes.find((n) => n.id === 'hidden_cavern_door');
+    if (!plateA || !plateB || !doorNode) return;
+
+    const now = Date.now();
+    let standingA: ConnectedPlayer | null = null;
+    let standingB: ConnectedPlayer | null = null;
+
+    for (const p of session.players.values()) {
+      if (!p.connected) continue;
+      if (Math.hypot(p.x - plateA.x, p.y - plateA.y) <= 0.95) {
+        standingA = p;
+      }
+      if (Math.hypot(p.x - plateB.x, p.y - plateB.y) <= 0.95) {
+        standingB = p;
+      }
+    }
+
+    // 12-second chime latch keeps cooperative play smooth AND guarantees solo explorers are never soft-locked
+    if (standingA) session.plateLatchUntil.plateA = now + 12_000;
+    if (standingB) session.plateLatchUntil.plateB = now + 12_000;
+
+    const activeA = Boolean(standingA) || session.plateLatchUntil.plateA > now;
+    const activeB = Boolean(standingB) || session.plateLatchUntil.plateB > now;
+
+    const prevA = session.adventure.activePlates.plateA;
+    const prevB = session.adventure.activePlates.plateB;
+
+    if (activeA && activeB) {
+      session.adventure.activePlates = { plateA: true, plateB: true };
+      session.adventure.hiddenDoorOpen = true;
+      const actor = standingA ?? standingB ?? Array.from(session.players.values())[0];
+      const actorName = actor?.displayName ?? 'The Expedition';
+      const actorUid = actor?.uid ?? session.room.ownerUid;
+
+      this.setAdventureMapObjectTile(
+        session,
+        actorUid,
+        doorNode.x,
+        doorNode.y,
+        ObjectTile.HIDDEN_DOOR_OPEN
+      );
+      this.completeQuestIfNew(session, 'q7_twin_plates', actorName);
+      this.pushAdventureNotification(
+        session,
+        actorName,
+        'mechanism',
+        'Hidden Cavern Path Opened!',
+        "Both pressure stones clicked into place—Founder's Cavern is now open to explore."
+      );
+      this.broadcast(session, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.stateUpdated',
+        adventure: session.adventure,
+      });
+      void saveAdventureProgress(session.room.id, session.adventure);
+      return;
+    }
+
+    if (activeA !== prevA || activeB !== prevB) {
+      session.adventure.activePlates = { plateA: activeA, plateB: activeB };
+      this.broadcast(session, {
+        v: PROTOCOL_VERSION,
+        type: 'adventure.stateUpdated',
+        adventure: session.adventure,
+      });
+      if ((activeA && !prevA) || (activeB && !prevB)) {
+        const actorName = (standingA ?? standingB)?.displayName ?? 'A teammate';
+        this.pushAdventureNotification(
+          session,
+          actorName,
+          'mechanism',
+          '1 / 2 Pressure Stones Lit',
+          'Step on the second pressure stone nearby to unseal the cavern doorway!'
+        );
+      }
     }
   }
 

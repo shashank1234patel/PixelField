@@ -1,3 +1,4 @@
+import type { AdventureNotification, AdventureState } from './adventureData.ts';
 import type { HatStyle, TileLayer } from './tiles.ts';
 
 export const PROTOCOL_VERSION = 1;
@@ -104,6 +105,13 @@ export type ClientEvent =
       tileId: number;
     }
   | { v: number; type: 'world.undoRequest' }
+  | { v: number; type: 'adventure.interact'; nodeId: string }
+  | {
+      v: number;
+      type: 'adventure.solvePuzzle';
+      nodeId: string;
+      answer: string | string[];
+    }
   | { v: number; type: 'chat.send'; text: string }
   | { v: number; type: 'chat.report'; targetUid: string; reason: string }
   | { v: number; type: 'ping'; ts: number };
@@ -125,6 +133,7 @@ export type ServerEvent =
         chunks: ChunkSnapshotPayload[];
       };
       recentChat: ChatMessagePayload[];
+      adventure: AdventureState;
       canUndo: boolean;
     }
   | { v: number; type: 'player.joined'; player: RoomPlayerState }
@@ -173,6 +182,15 @@ export type ServerEvent =
     }
   | { v: number; type: 'chat.message'; message: ChatMessagePayload }
   | { v: number; type: 'chat.notice'; text: string; timestamp: number }
+  | { v: number; type: 'adventure.stateUpdated'; adventure: AdventureState }
+  | { v: number; type: 'adventure.notification'; notification: AdventureNotification }
+  | {
+      v: number;
+      type: 'adventure.puzzleResult';
+      nodeId: string;
+      solved: boolean;
+      message: string;
+    }
   | { v: number; type: 'room.settingsChanged'; room: RoomSummary }
   | { v: number; type: 'room.kicked'; reason: string }
   | { v: number; type: 'room.closed'; reason: string }

@@ -7,6 +7,12 @@ import {
   saveReconnectCredential,
 } from '../lib/api.ts';
 import {
+  type AdventureNotification,
+  type AdventureState,
+  createInitialAdventureState,
+  normalizeAdventureState,
+} from '../shared/adventureData.ts';
+import {
   type BuildPolicy,
   type ChatMessagePayload,
   type ClientEvent,
@@ -29,6 +35,13 @@ export interface LivePlayerEntity extends RoomPlayerState {
   targetY: number;
 }
 
+export interface PuzzleFeedbackState {
+  nodeId: string;
+  solved: boolean;
+  message: string;
+  ts: number;
+}
+
 interface PendingOptimisticEdit {
   tileX: number;
   tileY: number;
@@ -45,6 +58,9 @@ export function useRoomSocket(
   const [selfUid, setSelfUid] = useState<string | null>(null);
   const [players, setPlayers] = useState<RoomPlayerState[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessagePayload[]>([]);
+  const [adventure, setAdventure] = useState<AdventureState>(() => createInitialAdventureState());
+  const [adventureBanner, setAdventureBanner] = useState<AdventureNotification | null>(null);
+  const [puzzleFeedback, setPuzzleFeedback] = useState<PuzzleFeedbackState | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [worldVersion, setWorldVersion] = useState(0);
   const [toast, setToast] = useState<{ id: number; text: string; tone: 'info' | 'error' } | null>(null);
@@ -59,13 +75,26 @@ export function useRoomSocket(
   const pingTimerRef = useRef<number | null>(null);
   const retryCountRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
+  const bannerTimerRef = useRef<number | null>(null);
   const onFatalLeaveRef = useRef(onFatalLeave);
   onFatalLeaveRef.current = onFatalLeave;
 
   const pushToast = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     setToast({ id: Date.now(), text, tone });
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 3200);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 3400);
+  }, []);
+
+  const dismissAdventureBanner = useCallback(() => {
+    setAdventureBanner(null);
+    if (bannerTimerRef.current) {
+      window.clearTimeout(bannerTimerRef.current);
+      bannerTimerRef.current = null;
+    }
+  }, []);
+
+  const clearPuzzleFeedback = useCallback(() => {
+    setPuzzleFeedback(null);
   }, []);
 
   const syncPlayersList = useCallback(() => {
@@ -136,6 +165,7 @@ export function useRoomSocket(
             setSelfUid(msg.selfUid);
             selfUidRef.current = msg.selfUid;
             setCanUndo(msg.canUndo);
+            setAdventure(normalizeAdventureState(msg.adventure));
             saveReconnectCredential(msg.room.id, msg.reconnectToken);
 
             // Reconstruct authoritative map from chunks
@@ -162,6 +192,43 @@ export function useRoomSocket(
             playersRef.current = nextMap;
             syncPlayersList();
             setChatMessages(msg.recentChat);
+            break;
+          }
+
+          case 'adventure.stateUpdated': {
+            setAdventure(normalizeAdventureState(msg.adventure));
+            break;
+          }
+
+          case 'adventure.notification': {
+            setAdventureBanner(msg.notification);
+            if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
+            bannerTimerRef.current = window.setTimeout(() => setAdventureBanner(null), 5500);
+
+            if (msg.notification.kind === 'quest' || msg.notification.kind === 'story') {
+              soundFx.questComplete();
+            } else if (msg.notification.kind === 'puzzle') {
+              soundFx.chestOpen();
+            } else if (msg.notification.kind === 'mechanism') {
+              soundFx.plateClick();
+            } else {
+              soundFx.clueFound();
+            }
+            break;
+          }
+
+          case 'adventure.puzzleResult': {
+            setPuzzleFeedback({
+              nodeId: msg.nodeId,
+              solved: msg.solved,
+              message: msg.message,
+              ts: Date.now(),
+            });
+            if (msg.solved) {
+              soundFx.chestOpen();
+            } else {
+              soundFx.error();
+            }
             break;
           }
 
@@ -328,6 +395,7 @@ export function useRoomSocket(
       if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
       if (pingTimerRef.current) window.clearInterval(pingTimerRef.current);
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      if (bannerTimerRef.current) window.clearTimeout(bannerTimerRef.current);
       wsRef.current?.close(1000, 'Leaving room');
       wsRef.current = null;
     };
@@ -348,6 +416,29 @@ export function useRoomSocket(
     [sendEvent]
   );
 
+  const interactAdventureNode = useCallback(
+    (nodeId: string) => {
+      sendEvent({
+        v: PROTOCOL_VERSION,
+        type: 'adventure.interact',
+        nodeId,
+      });
+    },
+    [sendEvent]
+  );
+
+  const solveAdventurePuzzle = useCallback(
+    (nodeId: string, answer: string | string[]) => {
+      sendEvent({
+        v: PROTOCOL_VERSION,
+        type: 'adventure.solvePuzzle',
+        nodeId,
+        answer,
+      });
+    },
+    [sendEvent]
+  );
+
   const requestEdit = useCallback(
     (tileX: number, tileY: number, layer: TileLayer, tileId: number) => {
       if (!mapRef.current) return;
@@ -358,7 +449,6 @@ export function useRoomSocket(
       const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       pendingEditsRef.current.set(requestId, { tileX, tileY, layer, previousTileId: prevTile });
 
-      // Optimistic local update for snappy feel; rolled back if server rejects
       if (layer === 'ground') {
         mapRef.current.ground[idx] = tileId;
       } else {
@@ -456,12 +546,19 @@ export function useRoomSocket(
     selfUid,
     players,
     chatMessages,
+    adventure,
+    adventureBanner,
+    puzzleFeedback,
     canUndo,
     worldVersion,
     toast,
     mapRef,
     playersRef,
     sendMove,
+    interactAdventureNode,
+    solveAdventurePuzzle,
+    dismissAdventureBanner,
+    clearPuzzleFeedback,
     requestEdit,
     requestUndo,
     sendChat,
@@ -475,3 +572,4 @@ export function useRoomSocket(
     leaveRoom,
   };
 }
+

@@ -1,4 +1,8 @@
 import {
+  getAdventureAnchors,
+  getAdventureNodesForMap,
+} from './adventureData.ts';
+import {
   CHUNK_SIZE,
   GroundTile,
   ObjectTile,
@@ -406,6 +410,147 @@ export function generateStarterVillage(
   for (const [px, py, prop] of props) {
     if (inside(px, py) && ground[tileIndex(px, py, w)] !== GroundTile.WATER) {
       setO(px, py, prop);
+    }
+  }
+
+  // 10. Adventure Mystery Landmarks: Broken Pasture Fence + Footprint Trail, Southeast Ruins, and Founder's Cavern
+  const anchors = getAdventureAnchors(w, h);
+
+  // 10a. Broken south pasture fence & muddy footprints leading southeast to Boundary Stone and Hollow Oak Stump
+  setO(anchors.brokenFenceX, anchors.brokenFenceY, ObjectTile.NONE);
+  setO(anchors.brokenFenceX + 1, anchors.brokenFenceY, ObjectTile.NONE);
+  setG(anchors.brokenFenceX, anchors.brokenFenceY, GroundTile.FOOTPRINTS);
+  const footSteps = 14;
+  for (let s = 1; s <= footSteps; s++) {
+    const t = s / footSteps;
+    const fx = Math.round(anchors.brokenFenceX + (anchors.boundaryStoneX - anchors.brokenFenceX) * t);
+    const fy = Math.round(anchors.brokenFenceY + (anchors.boundaryStoneY - anchors.brokenFenceY) * t);
+    if (inside(fx, fy) && ground[tileIndex(fx, fy, w)] !== GroundTile.WATER) {
+      setG(fx, fy, GroundTile.FOOTPRINTS);
+      setO(fx, fy, ObjectTile.NONE);
+    }
+  }
+  const stumpSteps = 8;
+  for (let s = 1; s <= stumpSteps; s++) {
+    const t = s / stumpSteps;
+    const fx = Math.round(anchors.boundaryStoneX + (anchors.hollowStumpX - anchors.boundaryStoneX) * t);
+    const fy = Math.round(anchors.boundaryStoneY + (anchors.hollowStumpY - anchors.boundaryStoneY) * t);
+    if (inside(fx, fy) && ground[tileIndex(fx, fy, w)] !== GroundTile.WATER) {
+      setG(fx, fy, GroundTile.FOOTPRINTS);
+      setO(fx, fy, ObjectTile.NONE);
+    }
+  }
+
+  // 10b. Southeast Ruins Courtyard & Founder's Cavern Sanctuary
+  const rX = anchors.ruinsX;
+  const rY = anchors.ruinsY;
+  // Clear a generous mossy stone clearing for the ruins & pressure plates
+  fillG(rX - 1, rY + 2, 22, 11, GroundTile.GRASS);
+  fillO(rX - 1, rY + 2, 22, 11, ObjectTile.NONE);
+  fillG(rX + 1, rY + 4, 18, 8, GroundTile.RUIN_FLOOR);
+  // Connecting flagstone path from south road down into the ruins courtyard
+  for (let py = southRoadY + 3; py <= rY + 4; py++) {
+    setG(anchors.altarX, py, GroundTile.STONE_PATH);
+    setG(anchors.altarX + 1, py, GroundTile.STONE_PATH);
+    setO(anchors.altarX, py, ObjectTile.NONE);
+    setO(anchors.altarX + 1, py, ObjectTile.NONE);
+  }
+  // Decorative ancient ruin pillars around courtyard corners
+  for (const [px, py] of [
+    [rX + 1, rY + 4],
+    [rX + 6, rY + 4],
+    [rX + 1, rY + 11],
+    [rX + 6, rY + 11],
+    [rX + 18, rY + 11],
+  ]) {
+    setO(px, py, ObjectTile.RUIN_PILLAR);
+  }
+  setO(rX + 2, rY + 8, ObjectTile.LAMP_POST);
+  setO(rX + 17, rY + 8, ObjectTile.LAMP_POST);
+
+  // Build Founder's Cavern chamber directly north of the Sealed Cavern Door (x = doorX-4..doorX+4, y = doorY-7..doorY)
+  const cavLeft = anchors.doorX - 4;
+  const cavRight = anchors.doorX + 4;
+  const cavTop = anchors.doorY - 7;
+  const cavBot = anchors.doorY;
+  fillG(cavLeft, cavTop, cavRight - cavLeft + 1, cavBot - cavTop + 1, GroundTile.RUIN_FLOOR);
+  fillO(cavLeft, cavTop, cavRight - cavLeft + 1, cavBot - cavTop + 1, ObjectTile.NONE);
+  for (let yy = cavTop; yy <= cavBot; yy++) {
+    for (let xx = cavLeft; xx <= cavRight; xx++) {
+      const border = xx === cavLeft || xx === cavRight || yy === cavTop || yy === cavBot;
+      if (border) {
+        setO(xx, yy, ObjectTile.CAVERN_WALL);
+      }
+    }
+  }
+  // Warm interior torches/lamps & crates inside the hidden sanctuary
+  setO(cavLeft + 1, cavTop + 1, ObjectTile.LAMP_POST);
+  setO(cavRight - 1, cavTop + 1, ObjectTile.LAMP_POST);
+  setO(cavLeft + 1, cavBot - 1, ObjectTile.CRATE);
+  setO(cavRight - 1, cavBot - 1, ObjectTile.BARREL);
+  setO(anchors.doorX, anchors.doorY, ObjectTile.HIDDEN_DOOR_CLOSED);
+  setG(anchors.doorX, anchors.doorY, GroundTile.RUIN_FLOOR);
+  // Ensure walkable approach outside the cavern door & around both pressure plates
+  fillO(anchors.doorX - 3, anchors.doorY + 1, 7, 4, ObjectTile.NONE);
+  setG(anchors.plateAX, anchors.plateAY, GroundTile.PRESSURE_PLATE);
+  setG(anchors.plateBX, anchors.plateBY, GroundTile.PRESSURE_PLATE);
+
+  // 10c. Place all adventure node visual tiles & clear immediate standing tiles around them
+  const adventureNodes = getAdventureNodesForMap(w, h);
+  for (const node of adventureNodes) {
+    if (!inside(node.x, node.y)) continue;
+    // Keep at least one adjacent standing tile clear so players can always walk right up
+    if (inside(node.x, node.y + 1) && ground[tileIndex(node.x, node.y + 1, w)] !== GroundTile.WATER) {
+      if (node.kind !== 'hidden_door' && node.kind !== 'pressure_plate') {
+        const adjObj = objects[tileIndex(node.x, node.y + 1, w)];
+        if (adjObj === ObjectTile.TREE_OAK || adjObj === ObjectTile.TREE_PINE || adjObj === ObjectTile.BUSH || adjObj === ObjectTile.FENCE) {
+          setO(node.x, node.y + 1, ObjectTile.NONE);
+        }
+      }
+    }
+    if (ground[tileIndex(node.x, node.y, w)] === GroundTile.WATER) {
+      setG(node.x, node.y, GroundTile.SAND_SHORE);
+    }
+
+    switch (node.kind) {
+      case 'npc':
+        // NPCs are rendered as animated villager characters; keep their tile clear
+        setO(node.x, node.y, ObjectTile.NONE);
+        break;
+      case 'chest':
+        setO(node.x, node.y, ObjectTile.CHEST_LOCKED);
+        break;
+      case 'note':
+        if (node.id === 'west_signpost' || node.id === 'pasture_clue') {
+          setO(node.x, node.y, ObjectTile.SIGNPOST);
+        } else {
+          setO(node.x, node.y, ObjectTile.NOTE_SCROLL);
+        }
+        break;
+      case 'satchel':
+      case 'curio':
+        setO(node.x, node.y, ObjectTile.RELIC_SATCHEL);
+        break;
+      case 'puzzle_altar':
+        setO(node.x, node.y, ObjectTile.ANCIENT_STATUE);
+        break;
+      case 'pressure_plate':
+        setG(node.x, node.y, GroundTile.PRESSURE_PLATE);
+        setO(node.x, node.y, ObjectTile.NONE);
+        break;
+      case 'hidden_door':
+        setO(node.x, node.y, ObjectTile.HIDDEN_DOOR_CLOSED);
+        break;
+      case 'landmark':
+        if (node.id === 'south_boundary_stone') {
+          setO(node.x, node.y, ObjectTile.BOUNDARY_STONE);
+        } else if (node.id === 'pond_lantern_tower') {
+          setG(node.x, node.y, GroundTile.PLAZA_STONE);
+          setO(node.x, node.y, ObjectTile.LANTERN_TOWER);
+        } else if (node.id === 'plaza_well') {
+          setO(node.x, node.y, ObjectTile.WELL);
+        }
+        break;
     }
   }
 

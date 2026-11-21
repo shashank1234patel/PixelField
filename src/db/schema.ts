@@ -124,6 +124,17 @@ export const chatModerationLogs = pgTable('chat_moderation_logs', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+export const adventureProgress = pgTable('adventure_progress', {
+  id: serial('id').primaryKey(),
+  roomId: text('room_id')
+    .references(() => rooms.id, { onDelete: 'cascade' })
+    .notNull()
+    .unique(),
+  chapterId: text('chapter_id').notNull().default('chapter_1'),
+  stateJson: text('state_json').notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   ownedRooms: many(rooms),
   memberships: many(roomMemberships),
@@ -137,6 +148,10 @@ export const roomsRelations = relations(rooms, ({ one, many }) => ({
   world: one(worlds, {
     fields: [rooms.id],
     references: [worlds.roomId],
+  }),
+  adventure: one(adventureProgress, {
+    fields: [rooms.id],
+    references: [adventureProgress.roomId],
   }),
   memberships: many(roomMemberships),
 }));

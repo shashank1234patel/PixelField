@@ -11,12 +11,14 @@ import {
   RefreshCw,
   Trash2,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
+import { soundFx } from '../game/sound.ts';
 import { api, saveReconnectCredential } from '../lib/api.ts';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import type {
-  BuildPolicy,
   RoomSummary,
   RoomVisibility,
   UserProfile,
@@ -77,11 +79,10 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [showHelpModal, setShowHelpModal] = useState(false);
 
   // Create room form state
-  const [roomName, setRoomName] = useState(`${user.displayName}'s Village`);
+  const [roomName, setRoomName] = useState(`${user.displayName}'s Expedition`);
   const [visibility, setVisibility] = useState<RoomVisibility>('open');
   const [capacity, setCapacity] = useState(15);
   const [allowLateJoin, setAllowLateJoin] = useState(true);
-  const [buildPolicy, setBuildPolicy] = useState<BuildPolicy>('everyone');
   const [roomPassword, setRoomPassword] = useState('');
   const [mapSeed, setMapSeed] = useState('');
   const [creating, setCreating] = useState(false);
@@ -92,10 +93,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   const [editColor, setEditColor] = useState(user.avatarColor);
   const [editHat, setEditHat] = useState<HatStyle>(user.hatStyle);
   const [editReducedMotion, setEditReducedMotion] = useState(user.reducedMotion);
+  const [soundMuted, setSoundMuted] = useState(() => soundFx.getMuted());
   const [profileStatus, setProfileStatus] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [linkingGoogle, setLinkingGoogle] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    return soundFx.subscribe(setSoundMuted);
+  }, []);
 
   const loadRooms = useCallback(async () => {
     setLoadingLists(true);
@@ -162,7 +168,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         visibility,
         capacity,
         allowLateJoin,
-        buildPolicy,
+        buildPolicy: 'everyone',
         password: roomPassword.trim() || undefined,
         seed: parsedSeed !== undefined && Number.isFinite(parsedSeed) ? parsedSeed : undefined,
       });
@@ -321,7 +327,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             className="flex items-center gap-1.5 rounded-lg bg-[#2D6A4F] px-4 py-2 text-sm font-semibold text-white hover:bg-[#23553F] transition-colors whitespace-nowrap shrink-0"
           >
             <Plus className="h-4 w-4" />
-            <span>Create World</span>
+            <span>Start Hunt</span>
           </button>
         </div>
 
@@ -390,7 +396,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <div className="lg:col-span-6 flex flex-col justify-between gap-6">
             <div>
               <h1 className="font-display text-3xl font-bold tracking-tight text-[#1C2420] sm:text-4xl">
-                Join or create a village.
+                Start or join a treasure hunt.
               </h1>
 
               <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -400,7 +406,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   className="flex items-center gap-2 rounded-lg bg-[#2D6A4F] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#23553F] transition-colors whitespace-nowrap shrink-0"
                 >
                   <Plus className="h-4 w-4" />
-                  <span>Create World</span>
+                  <span>Start Expedition</span>
                 </button>
               </div>
             </div>
@@ -433,7 +439,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                   disabled={joining}
                   className="rounded-lg bg-[#1C2420] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#2E3A34] transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
                 >
-                  {joining ? 'Joining…' : 'Join Village'}
+                  {joining ? 'Joining…' : 'Join Hunt'}
                 </button>
               </div>
 
@@ -633,15 +639,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                         <span aria-hidden="true">·</span>
                         <span className="font-mono">{r.shortCode}</span>
                         <span aria-hidden="true">·</span>
-                        <span>{r.status === 'active' ? 'Open World' : 'Lobby Waiting'}</span>
+                        <span>{r.status === 'active' ? 'Live Hunt' : 'Lobby Waiting'}</span>
                         <span aria-hidden="true">·</span>
-                        <span>
-                          {r.buildPolicy === 'everyone'
-                            ? 'Open Building'
-                            : r.buildPolicy === 'build_zones'
-                            ? 'Build Zones'
-                            : 'Host Builds'}
-                        </span>
+                        <span>Chapter 1 · 8 Quests</span>
                       </div>
                     </div>
 
@@ -680,9 +680,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <div className="flex items-center justify-between gap-4 border-b border-[#ECE9DF] pb-4">
               <div>
                 <h2 id="create-room-title" className="font-display text-2xl font-semibold text-[#1C2420]">
-                  Create a Village World
+                  Start a Treasure Hunt
                 </h2>
-                <p className="text-xs text-[#5A6660]">Pixelfield Village Map · 192 × 144 tiles</p>
+                <p className="text-xs text-[#5A6660]">Chapter 1 · The Cartographer&apos;s Lantern (8 Quests)</p>
               </div>
               <button
                 type="button"
@@ -697,7 +697,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             <form onSubmit={handleCreateRoom} className="mt-5 space-y-5">
               <div>
                 <label htmlFor="create-name" className="block text-sm font-medium text-[#1C2420]">
-                  Village name
+                  Expedition name
                 </label>
                 <input
                   id="create-name"
@@ -740,42 +740,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label htmlFor="create-cap" className="flex items-center justify-between text-sm font-medium text-[#1C2420]">
-                    <span>Maximum players</span>
-                    <span className="font-mono text-sm font-semibold text-[#2D6A4F] tabular-nums">{capacity}</span>
-                  </label>
-                  <input
-                    id="create-cap"
-                    type="range"
-                    min={10}
-                    max={15}
-                    value={capacity}
-                    onChange={(e) => setCapacity(Number(e.target.value))}
-                    className="mt-2 w-full accent-[#2D6A4F]"
-                  />
-                  <div className="flex justify-between text-[11px] text-[#6B7770] tabular-nums">
-                    <span>10</span>
-                    <span>12</span>
-                    <span>15</span>
-                  </div>
-                </div>
-
-                <div>
-                  <label htmlFor="create-policy" className="block text-sm font-medium text-[#1C2420]">
-                    Building permissions
-                  </label>
-                  <select
-                    id="create-policy"
-                    value={buildPolicy}
-                    onChange={(e) => setBuildPolicy(e.target.value as BuildPolicy)}
-                    className="mt-1.5 w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] px-3 py-2 text-sm text-[#1C2420] focus:border-[#2D6A4F] focus:outline-none"
-                  >
-                    <option value="everyone">Everyone can build</option>
-                    <option value="build_zones">Marked build zones only</option>
-                    <option value="host_only">Host only</option>
-                  </select>
+              <div>
+                <label htmlFor="create-cap" className="flex items-center justify-between text-sm font-medium text-[#1C2420]">
+                  <span>Maximum explorers</span>
+                  <span className="font-mono text-sm font-semibold text-[#2D6A4F] tabular-nums">{capacity}</span>
+                </label>
+                <input
+                  id="create-cap"
+                  type="range"
+                  min={10}
+                  max={15}
+                  value={capacity}
+                  onChange={(e) => setCapacity(Number(e.target.value))}
+                  className="mt-2 w-full accent-[#2D6A4F]"
+                />
+                <div className="flex justify-between text-[11px] text-[#6B7770] tabular-nums">
+                  <span>10</span>
+                  <span>12</span>
+                  <span>15</span>
                 </div>
               </div>
 
@@ -960,6 +942,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 </div>
               </div>
 
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-[#E5E1D5] bg-[#FAFAF7] px-3.5 py-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {soundMuted ? (
+                    <VolumeX className="h-4 w-4 text-[#7A857E] shrink-0" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 text-[#2D6A4F] shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-[#1C2420]">Ambient &amp; Game Sounds</div>
+                    <div className="text-xs text-[#5A6660]">
+                      {soundMuted ? 'Muted globally' : 'Enabled globally'}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!soundMuted}
+                  aria-label={soundMuted ? 'Unmute ambient and game sounds' : 'Mute ambient and game sounds'}
+                  onClick={() => soundFx.toggleMuted()}
+                  className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    soundMuted
+                      ? 'border-[#D4D1C5] bg-white text-[#4F5C55] hover:bg-[#F2F0E8]'
+                      : 'border-[#2D6A4F] bg-[#2D6A4F] text-white hover:bg-[#23553F]'
+                  }`}
+                >
+                  <span>{soundMuted ? 'Muted' : 'Sound On'}</span>
+                </button>
+              </div>
+
               <label className="flex items-center gap-2.5 text-sm text-[#3B4640] cursor-pointer">
                 <input
                   type="checkbox"
@@ -1018,7 +1030,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
           <div className="w-full max-w-md rounded-xl border border-[#DDD9CA] bg-white p-6 shadow-xl">
             <div className="flex items-center justify-between border-b border-[#ECE9DF] pb-3">
-              <h2 className="font-display text-xl font-semibold text-[#1C2420]">Village Controls</h2>
+              <h2 className="font-display text-xl font-semibold text-[#1C2420]">Adventure Controls</h2>
               <button
                 type="button"
                 onClick={() => setShowHelpModal(false)}
@@ -1029,24 +1041,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             </div>
             <dl className="mt-4 space-y-2.5 text-sm">
               <div className="flex justify-between gap-4">
-                <dt className="text-[#5A6660]">Move around</dt>
+                <dt className="text-[#5A6660]">Explore village</dt>
                 <dd className="font-mono text-xs font-semibold text-[#1C2420]">WASD / Arrow keys / Touch pad</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#5A6660]">Place selected tile</dt>
-                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Left-click or Space</dd>
+                <dt className="text-[#5A6660]">Inspect clues, chests &amp; NPCs</dt>
+                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Key E / Space / Click</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#5A6660]">Clear / Remove tile</dt>
-                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Right-click or Clear mode (B)</dd>
+                <dt className="text-[#5A6660]">Field Journal, Clues &amp; Hints</dt>
+                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Key J</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#5A6660]">Quick-pick hotbar slot</dt>
-                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Keys 1 – 9</dd>
+                <dt className="text-[#5A6660]">Toggle village minimap</dt>
+                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Key M</dd>
               </div>
               <div className="flex justify-between gap-4">
-                <dt className="text-[#5A6660]">Undo last placement</dt>
-                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Key Z</dd>
+                <dt className="text-[#5A6660]">Room chat</dt>
+                <dd className="font-mono text-xs font-semibold text-[#1C2420]">Enter</dd>
               </div>
             </dl>
           </div>

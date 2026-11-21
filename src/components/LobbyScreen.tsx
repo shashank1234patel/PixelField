@@ -111,7 +111,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
               className="flex items-center gap-1.5 rounded-lg bg-[#2D6A4F] px-4 py-2 text-sm font-semibold text-white hover:bg-[#23553F] transition-colors whitespace-nowrap shrink-0"
             >
               <Play className="h-4 w-4" />
-              <span>Start Village</span>
+              <span>Start Expedition</span>
             </button>
           ) : (
             <button
@@ -176,7 +176,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
           {/* Left: Roster */}
           <section className="lg:col-span-7 space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="font-display text-xl font-semibold text-[#1C2420]">Villagers</h2>
+              <h2 className="font-display text-xl font-semibold text-[#1C2420]">Explorers</h2>
               <span className="flex items-center gap-1.5 text-xs font-medium text-[#5A6660] tabular-nums">
                 <Users className="h-3.5 w-3.5" />
                 {connectedCount} / {room.capacity} seated
@@ -291,32 +291,6 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 )}
               </div>
 
-              <div>
-                <label htmlFor="lobby-policy" className="block text-xs font-medium text-[#5A6660]">
-                  Building Policy
-                </label>
-                {isHost ? (
-                  <select
-                    id="lobby-policy"
-                    value={room.buildPolicy}
-                    onChange={(e) => onUpdateSettings({ buildPolicy: e.target.value as BuildPolicy })}
-                    className="mt-1.5 w-full rounded-lg border border-[#D4D1C5] bg-[#FAFAF7] px-3 py-2 text-sm text-[#1C2420]"
-                  >
-                    <option value="everyone">Everyone can build</option>
-                    <option value="build_zones">Marked build zones only</option>
-                    <option value="host_only">Host only</option>
-                  </select>
-                ) : (
-                  <p className="mt-1 text-sm font-medium text-[#1C2420]">
-                    {room.buildPolicy === 'everyone'
-                      ? 'Everyone can build'
-                      : room.buildPolicy === 'build_zones'
-                      ? 'Marked build zones only'
-                      : 'Host only'}
-                  </p>
-                )}
-              </div>
-
               <div className="flex items-center justify-between pt-1">
                 <span className="text-sm text-[#3B4640]">Allow late arrivals</span>
                 {isHost ? (
@@ -333,8 +307,13 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                 )}
               </div>
 
-              <div className="border-t border-[#ECE9DF] pt-4 text-xs text-[#616E67]">
-                World Map: <strong className="font-medium text-[#1C2420]">Pixelfield Village · 192 × 144</strong>
+              <div className="border-t border-[#ECE9DF] pt-4 space-y-1 text-xs text-[#616E67]">
+                <div>
+                  Adventure: <strong className="font-medium text-[#1C2420]">Chapter 1 · The Cartographer&apos;s Lantern</strong>
+                </div>
+                <div>
+                  Story Trail: <strong className="font-medium text-[#1C2420]">8 connected quests · Shared clues &amp; keys</strong>
+                </div>
               </div>
 
               {isHost && (
@@ -345,7 +324,7 @@ export const LobbyScreen: React.FC<LobbyScreenProps> = ({
                     className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#2D6A4F] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#23553F]"
                   >
                     <Play className="h-4 w-4" />
-                    <span>Enter Village Together</span>
+                    <span>Begin Treasure Hunt</span>
                   </button>
 
                   {!confirmClose ? (
